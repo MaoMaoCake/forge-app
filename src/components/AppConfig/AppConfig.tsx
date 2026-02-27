@@ -8,6 +8,8 @@ import { testIds } from '../testIds';
 
 type AppPluginSettings = {
   apiUrl?: string;
+  // New: Postgres DSN for backend
+  postgresDsn?: string;
 };
 
 type State = {
@@ -28,7 +30,9 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
     apiUrl: jsonData?.apiUrl || '',
     apiKey: '',
     isApiKeySet: Boolean(secureJsonFields?.apiKey),
-  });
+    // New: load DSN from jsonData
+    postgresDsn: (jsonData as any)?.postgresDsn || '',
+  } as State & { postgresDsn: string });
 
   const isSubmitDisabled = Boolean(!state.apiUrl || (!state.isApiKeySet && !state.apiKey));
 
@@ -56,6 +60,8 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
       pinned,
       jsonData: {
         apiUrl: state.apiUrl,
+        // New: store Postgres DSN in plugin jsonData
+        postgresDsn: (state as any).postgresDsn,
       },
       // This cannot be queried later by the frontend.
       // We don't want to override it in case it was set previously and left untouched now.
@@ -92,6 +98,17 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
             data-testid={testIds.appConfig.apiUrl}
             value={state.apiUrl}
             placeholder={`E.g.: http://mywebsite.com/api/v1`}
+            onChange={onChange}
+          />
+        </Field>
+
+        <Field label="Postgres DSN" description="Connection string used by the backend to connect to Postgres" className={s.marginTop}>
+          <Input
+            width={60}
+            name="postgresDsn"
+            id="config-postgres-dsn"
+            value={(state as any).postgresDsn}
+            placeholder={`E.g.: host=localhost user=forge password=secret dbname=forge sslmode=disable`}
             onChange={onChange}
           />
         </Field>

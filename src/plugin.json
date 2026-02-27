@@ -22,29 +22,22 @@
   "includes": [
     {
       "type": "page",
-      "name": "Page One",
-      "path": "/a/%PLUGIN_ID%/one",
+      "name": "Dashboard",
+      "path": "/a/%PLUGIN_ID%/dashboard",
       "addToNav": true,
       "defaultNav": true
     },
     {
       "type": "page",
-      "name": "Page Two",
-      "path": "/a/%PLUGIN_ID%/two",
+      "name": "Create Agent",
+      "path": "/a/%PLUGIN_ID%/create",
       "addToNav": true,
       "defaultNav": false
     },
     {
       "type": "page",
-      "name": "Page Three",
-      "path": "/a/%PLUGIN_ID%/three",
-      "addToNav": true,
-      "defaultNav": false
-    },
-    {
-      "type": "page",
-      "name": "Page Four",
-      "path": "/a/%PLUGIN_ID%/four",
+      "name": "Edit Agent",
+      "path": "/a/%PLUGIN_ID%/config",
       "addToNav": true,
       "defaultNav": false
     },

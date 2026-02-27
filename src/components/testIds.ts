@@ -18,4 +18,12 @@ export const testIds = {
     container: 'data-testid pg-four-container',
     navigateBack: 'data-testid navigate-back',
   },
+  // Added test IDs for the Overview page
+  pageOverview: {
+    container: 'data-testid pg-overview-container',
+    list: 'data-testid pg-overview-list',
+    listItem: 'data-testid pg-overview-list-item',
+    error: 'data-testid pg-overview-error',
+    loading: 'data-testid pg-overview-loading',
+  },
 };

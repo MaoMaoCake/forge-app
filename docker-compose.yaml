@@ -3,3 +3,11 @@ services:
     extends:
       file: .config/docker-compose-base.yaml
       service: grafana
+  postgres:
+    image: postgres
+    environment:
+      POSTGRES_USER: grafana
+      POSTGRES_PASSWORD: grafana
+      POSTGRES_DB: grafana
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data

@@ -7,4 +7,7 @@ export enum ROUTES {
   Two = 'two',
   Three = 'three',
   Four = 'four',
+  config = 'config',
+  create = 'create',
+  dashboard = 'dashboard',
 }
