@@ -65,7 +65,7 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
 
   return (
     <form onSubmit={onSubmit}>
-      <FieldSet label="API Settings">
+      <FieldSet label="Forge Settings">
         <Field
           label="Postgres DSN"
           description="Connection string used by the backend to connect to Postgres"
