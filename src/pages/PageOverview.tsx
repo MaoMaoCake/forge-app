@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
-import { Alert, Button, Spinner, useStyles2 } from '@grafana/ui';
+import { Alert, LinkButton, Spinner, useStyles2 } from '@grafana/ui';
 import { PluginPage } from '@grafana/runtime';
 import { testIds } from '../components/testIds';
 import { prefixRoute } from '../utils/utils.routing';
@@ -19,7 +19,8 @@ interface AgentConfig {
 
 interface Agent {
   id?: number;
-  uuid?: string;
+  uuid?: string; // optional, for future compatibility
+  agent_uuid?: string; // actual identifier from backend JSON
   name?: string;
   description?: string;
   agentConfig?: AgentConfig | AgentConfig[];
@@ -57,8 +58,8 @@ function PageOverview() {
   }, []);
 
   const renderAgentName = (agent: Agent, index: number) => {
-    // Prefer explicit name/uuid, but always show something.
-    const base = agent.name || agent.uuid || `Collector #${index + 1}`;
+    // Prefer explicit name/UUID, but always show something.
+    const base = agent.name || agent.agent_uuid || agent.uuid || `Collector #${index + 1}`;
     const description = agent.description;
 
     return (
@@ -70,10 +71,11 @@ function PageOverview() {
   };
 
   const getEditHref = (agent: Agent) => {
-    if (!agent.uuid) {
+    const id = agent.agent_uuid || agent.uuid;
+    if (!id) {
       return undefined;
     }
-    return prefixRoute(`${ROUTES.config}/${agent.uuid}`);
+    return prefixRoute(`${ROUTES.config}/${id}`);
   };
 
   return (
@@ -105,20 +107,16 @@ function PageOverview() {
                   const editHref = getEditHref(agent);
                   return (
                     <li
-                      key={agent.uuid || agent.id || idx}
+                      key={agent.agent_uuid || agent.uuid || agent.id || idx}
                       className={s.listItem}
                       data-testid={testIds.pageOverview.listItem}
                     >
                       <div className={s.listItemInner}>
                         {renderAgentName(agent, idx)}
                         {editHref && (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            href={editHref}
-                          >
+                          <LinkButton variant="secondary" size="sm" href={editHref}>
                             Edit
-                          </Button>
+                          </LinkButton>
                         )}
                       </div>
                     </li>

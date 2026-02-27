@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -53,6 +54,30 @@ func (a *App) getCollector(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	uuid := req.URL.Query().Get("uuid")
+
+	w.Header().Add("Content-Type", "application/json")
+
+	if uuid != "" {
+		var agent Agent
+		if err := a.DB.Preload("AgentConfig").Where("agent_uuid = ?", uuid).First(&agent).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				http.Error(w, "collector not found", http.StatusNotFound)
+				return
+			}
+			fmt.Println("error querying agent:", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		if err := json.NewEncoder(w).Encode(agent); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	// For now, return all agents with their configs. You can later filter
 	// by query parameters (e.g., agent UUID) if needed.
 	var agents []Agent
@@ -62,7 +87,6 @@ func (a *App) getCollector(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	w.Header().Add("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(agents); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -153,5 +177,4 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	}
 
 	mux.HandleFunc("/collector", collectorHandler)
-	//mux.HandleFunc("/collector/", collectorHandler)
 }

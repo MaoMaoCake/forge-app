@@ -24,6 +24,26 @@ interface AgentPayload {
   agent_config: AgentConfig;
 }
 
+interface LegacyAgentConfig {
+  Config?: string;
+  CollectUnixLogs?: boolean;
+  CollectUnixNodeMetrics?: boolean;
+  CollectWinLogs?: boolean;
+  CollectWinNodeMetrics?: boolean;
+  CollectCadvisorMetrics?: boolean;
+  CollectKubernetesMetrics?: boolean;
+}
+
+interface CollectorResponse {
+  agent_uuid?: string;
+  uuid?: string;
+  name?: string;
+  advanced?: boolean;
+  AgentConfig?: LegacyAgentConfig;
+  agent_config?: AgentConfig;
+  agentConfig?: AgentConfig;
+}
+
 function PageConfig() {
   const s = useStyles2(getStyles);
   const { uuid } = useParams<{ uuid: string }>();
@@ -58,36 +78,69 @@ function PageConfig() {
       setLoadingExisting(true);
       setError(null);
       try {
-        const res = await fetch('/api/plugins/maomaocake-forge-app/resources/collector', {
-          method: 'GET',
-        });
-        if (!res.ok) {
-          throw new Error(`Failed to load collectors: ${res.status}`);
-        }
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          const match = data.find((a: any) => a.uuid === uuid || a.agent_uuid === uuid);
-          if (match) {
-            setForm({
-              agent_uuid: uuid,
-              name: match.name || '',
-              advanced: !!match.advanced,
-              agent_config: {
-                config: match.AgentConfig?.Config ?? match.agentConfig?.config ?? '',
-                collectUnixLogs: match.AgentConfig?.CollectUnixLogs ?? match.agentConfig?.collectUnixLogs ?? false,
-                collectUnixNodeMetrics:
-                  match.AgentConfig?.CollectUnixNodeMetrics ?? match.agentConfig?.collectUnixNodeMetrics ?? false,
-                collectWinLogs: match.AgentConfig?.CollectWinLogs ?? match.agentConfig?.collectWinLogs ?? false,
-                collectWinNodeMetrics:
-                  match.AgentConfig?.CollectWinNodeMetrics ?? match.agentConfig?.collectWinNodeMetrics ?? false,
-                collectCadvisorMetrics:
-                  match.AgentConfig?.CollectCadvisorMetrics ?? match.agentConfig?.collectCadvisorMetrics ?? false,
-                collectKubernetesMetrics:
-                  match.AgentConfig?.CollectKubernetesMetrics ?? match.agentConfig?.collectKubernetesMetrics ?? false,
-              },
-            });
+        const res = await fetch(
+          `/api/plugins/maomaocake-forge-app/resources/collector?uuid=${encodeURIComponent(uuid)}`,
+          {
+            method: 'GET',
           }
+        );
+
+        if (res.status === 404) {
+          setError('Collector not found');
+          return;
         }
+
+        if (!res.ok) {
+          throw new Error(`Failed to load collector: ${res.status}`);
+        }
+
+        const agent: CollectorResponse = await res.json();
+        const legacyConfig = agent.AgentConfig;
+        const camelConfig = agent.agentConfig;
+        const underscoreConfig = agent.agent_config;
+
+        setForm({
+          agent_uuid: agent.agent_uuid || agent.uuid || uuid,
+          name: agent.name || '',
+          advanced: !!agent.advanced,
+          agent_config: {
+            config:
+              legacyConfig?.Config ??
+              underscoreConfig?.config ??
+              camelConfig?.config ??
+              '',
+            collectUnixLogs:
+              legacyConfig?.CollectUnixLogs ??
+              underscoreConfig?.collectUnixLogs ??
+              camelConfig?.collectUnixLogs ??
+              false,
+            collectUnixNodeMetrics:
+              legacyConfig?.CollectUnixNodeMetrics ??
+              underscoreConfig?.collectUnixNodeMetrics ??
+              camelConfig?.collectUnixNodeMetrics ??
+              false,
+            collectWinLogs:
+              legacyConfig?.CollectWinLogs ??
+              underscoreConfig?.collectWinLogs ??
+              camelConfig?.collectWinLogs ??
+              false,
+            collectWinNodeMetrics:
+              legacyConfig?.CollectWinNodeMetrics ??
+              underscoreConfig?.collectWinNodeMetrics ??
+              camelConfig?.collectWinNodeMetrics ??
+              false,
+            collectCadvisorMetrics:
+              legacyConfig?.CollectCadvisorMetrics ??
+              underscoreConfig?.collectCadvisorMetrics ??
+              camelConfig?.collectCadvisorMetrics ??
+              false,
+            collectKubernetesMetrics:
+              legacyConfig?.CollectKubernetesMetrics ??
+              underscoreConfig?.collectKubernetesMetrics ??
+              camelConfig?.collectKubernetesMetrics ??
+              false,
+          },
+        });
       } catch (err: any) {
         setError(err?.message ?? 'Failed to load existing collector');
       } finally {
