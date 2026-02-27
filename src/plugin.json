@@ -40,7 +40,7 @@
       "name": "Edit Agent",
       "path": "/a/%PLUGIN_ID%/config",
       "role": "Admin",
-      "addToNav": true,
+      "addToNav": false,
       "defaultNav": false
     },
     {
