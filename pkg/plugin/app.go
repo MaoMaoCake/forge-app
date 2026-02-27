@@ -63,6 +63,7 @@ func NewApp(_ context.Context, settings backend.AppInstanceSettings) (instancemg
 	app.registerRoutes(mux)
 	app.CallResourceHandler = httpadapter.New(mux)
 
+	fmt.Println("postgresDsn:", settings.DecryptedSecureJSONData["postgresDsn"])
 	// Read Postgres DSN from plugin JSON settings
 	dsn, ok := settings.DecryptedSecureJSONData["postgresDsn"]
 	if !ok || dsn == "" {

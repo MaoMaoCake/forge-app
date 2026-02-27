@@ -5,9 +5,11 @@ services:
       service: grafana
   postgres:
     image: postgres
+    ports:
+      - 5432:5432
     environment:
       POSTGRES_USER: grafana
       POSTGRES_PASSWORD: grafana
       POSTGRES_DB: grafana
     volumes:
-      - ./data/postgres:/var/lib/postgresql/data
+      - ./data/postgres:/var/lib/postgresql

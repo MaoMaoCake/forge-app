@@ -3,22 +3,17 @@ import { lastValueFrom } from 'rxjs';
 import { css } from '@emotion/css';
 import { AppPluginMeta, GrafanaTheme2, PluginConfigPageProps, PluginMeta } from '@grafana/data';
 import { getBackendSrv } from '@grafana/runtime';
-import { Button, Field, FieldSet, Input, SecretInput, useStyles2 } from '@grafana/ui';
+import { Button, Field, FieldSet, SecretInput, useStyles2 } from '@grafana/ui';
 import { testIds } from '../testIds';
 
 type AppPluginSettings = {
-  apiUrl?: string;
-  // New: Postgres DSN for backend
   postgresDsn?: string;
 };
 
 type State = {
-  // The URL to reach our custom API.
-  apiUrl: string;
   // Tells us if the API key secret is set.
   isApiKeySet: boolean;
-  // A secret key for our custom API.
-  apiKey: string;
+  postgresDsn: string;
 };
 
 export interface AppConfigProps extends PluginConfigPageProps<AppPluginMeta<AppPluginSettings>> {}
@@ -27,19 +22,17 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
   const s = useStyles2(getStyles);
   const { enabled, pinned, jsonData, secureJsonFields } = plugin.meta;
   const [state, setState] = useState<State>({
-    apiUrl: jsonData?.apiUrl || '',
-    apiKey: '',
     isApiKeySet: Boolean(secureJsonFields?.apiKey),
     // New: load DSN from jsonData
     postgresDsn: (jsonData as any)?.postgresDsn || '',
   } as State & { postgresDsn: string });
 
-  const isSubmitDisabled = Boolean(!state.apiUrl || (!state.isApiKeySet && !state.apiKey));
+  const isSubmitDisabled = Boolean((!state.isApiKeySet && !state.postgresDsn));
 
   const onResetApiKey = () =>
     setState({
       ...state,
-      apiKey: '',
+      postgresDsn: '',
       isApiKeySet: false,
     });
 
@@ -59,16 +52,13 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
       enabled,
       pinned,
       jsonData: {
-        apiUrl: state.apiUrl,
-        // New: store Postgres DSN in plugin jsonData
-        postgresDsn: (state as any).postgresDsn,
       },
       // This cannot be queried later by the frontend.
       // We don't want to override it in case it was set previously and left untouched now.
       secureJsonData: state.isApiKeySet
         ? undefined
         : {
-            apiKey: state.apiKey,
+            postgresDsn: (state as any).postgresDsn,
           },
     });
   };
@@ -76,46 +66,26 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
   return (
     <form onSubmit={onSubmit}>
       <FieldSet label="API Settings">
-        <Field label="API Key" description="A secret key for authenticating to our custom API">
+        <Field
+          label="Postgres DSN"
+          description="Connection string used by the backend to connect to Postgres"
+          className={s.marginTop}
+        >
           <SecretInput
             width={60}
-            id="config-api-key"
-            data-testid={testIds.appConfig.apiKey}
-            name="apiKey"
-            value={state.apiKey}
+            name="postgresDsn"
+            id="config-postgres-dsn"
+            value={(state as any).postgresDsn}
             isConfigured={state.isApiKeySet}
-            placeholder={'Your secret API key'}
+            placeholder={`E.g.: host=localhost user=forge password=secret dbname=forge sslmode=disable`}
             onChange={onChange}
             onReset={onResetApiKey}
           />
         </Field>
 
-        <Field label="API Url" description="" className={s.marginTop}>
-          <Input
-            width={60}
-            name="apiUrl"
-            id="config-api-url"
-            data-testid={testIds.appConfig.apiUrl}
-            value={state.apiUrl}
-            placeholder={`E.g.: http://mywebsite.com/api/v1`}
-            onChange={onChange}
-          />
-        </Field>
-
-        <Field label="Postgres DSN" description="Connection string used by the backend to connect to Postgres" className={s.marginTop}>
-          <Input
-            width={60}
-            name="postgresDsn"
-            id="config-postgres-dsn"
-            value={(state as any).postgresDsn}
-            placeholder={`E.g.: host=localhost user=forge password=secret dbname=forge sslmode=disable`}
-            onChange={onChange}
-          />
-        </Field>
-
         <div className={s.marginTop}>
           <Button type="submit" data-testid={testIds.appConfig.submit} disabled={isSubmitDisabled}>
-            Save API settings
+            Save
           </Button>
         </div>
       </FieldSet>

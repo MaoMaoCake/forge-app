@@ -31,6 +31,7 @@
       "type": "page",
       "name": "Create Agent",
       "path": "/a/%PLUGIN_ID%/create",
+      "role": "Admin",
       "addToNav": true,
       "defaultNav": false
     },
@@ -38,6 +39,7 @@
       "type": "page",
       "name": "Edit Agent",
       "path": "/a/%PLUGIN_ID%/config",
+      "role": "Admin",
       "addToNav": true,
       "defaultNav": false
     },
