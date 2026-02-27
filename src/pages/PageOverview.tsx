@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
-import { Alert, Spinner, useStyles2 } from '@grafana/ui';
+import { Alert, Button, Spinner, useStyles2 } from '@grafana/ui';
 import { PluginPage } from '@grafana/runtime';
 import { testIds } from '../components/testIds';
+import { prefixRoute } from '../utils/utils.routing';
+import { ROUTES } from '../constants';
 
 // Shape of a single Agent returned by the /collector endpoint.
 // This mirrors the Go structs (Agent with embedded AgentConfig) loosely.
@@ -67,6 +69,13 @@ function PageOverview() {
     );
   };
 
+  const getEditHref = (agent: Agent) => {
+    if (!agent.uuid) {
+      return undefined;
+    }
+    return prefixRoute(`${ROUTES.config}/${agent.uuid}`);
+  };
+
   return (
     <PluginPage>
       <div className={s.container} data-testid={testIds.pageOverview.container}>
@@ -92,15 +101,29 @@ function PageOverview() {
               <div>No collectors found.</div>
             ) : (
               <ul className={s.list} data-testid={testIds.pageOverview.list}>
-                {agents.map((agent, idx) => (
-                  <li
-                    key={agent.uuid || agent.id || idx}
-                    className={s.listItem}
-                    data-testid={testIds.pageOverview.listItem}
-                  >
-                    {renderAgentName(agent, idx)}
-                  </li>
-                ))}
+                {agents.map((agent, idx) => {
+                  const editHref = getEditHref(agent);
+                  return (
+                    <li
+                      key={agent.uuid || agent.id || idx}
+                      className={s.listItem}
+                      data-testid={testIds.pageOverview.listItem}
+                    >
+                      <div className={s.listItemInner}>
+                        {renderAgentName(agent, idx)}
+                        {editHref && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            href={editHref}
+                          >
+                            Edit
+                          </Button>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </>
@@ -125,6 +148,12 @@ const getStyles = (theme: GrafanaTheme2) => ({
     padding: ${theme.spacing(1)} 0;
     border-bottom: 1px solid ${theme.colors.border.weak};
   `,
+  listItemInner: css`
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: ${theme.spacing(2)};
+  `,
   description: css`
     color: ${theme.colors.text.secondary};
     font-size: ${theme.typography.bodySmall.fontSize};
@@ -135,4 +164,3 @@ const getStyles = (theme: GrafanaTheme2) => ({
     gap: ${theme.spacing(1)};
   `,
 });
-

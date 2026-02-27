@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+
+	"gorm.io/gorm"
 )
 
 // handlePing is an example HTTP GET resource that returns a {"message": "ok"} JSON response.
@@ -68,9 +70,88 @@ func (a *App) getCollector(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+func (a *App) createOrUpdateAgent(w http.ResponseWriter, req *http.Request) {
+	fmt.Println("Received request for /collector (create/update)")
+
+	var agent Agent
+	if err := json.NewDecoder(req.Body).Decode(&agent); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if a.DB == nil {
+		http.Error(w, "database not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	err := a.DB.Transaction(func(tx *gorm.DB) error {
+		var existing Agent
+		if err := tx.Where("agent_uuid = ?", agent.AgentUUID).First(&existing).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				// Create new agent
+				return tx.Create(&agent).Error
+			}
+			return err
+		}
+
+		// Update existing agent
+		existing.Name = agent.Name
+		existing.LastSeen = agent.LastSeen
+		existing.Advanced = agent.Advanced
+
+		if err := tx.Save(&existing).Error; err != nil {
+			return err
+		}
+
+		// Upsert AgentConfig
+		var existingConfig AgentConfig
+		if err := tx.Where("agent_id = ?", existing.ID).First(&existingConfig).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				agent.AgentConfig.AgentID = existing.ID
+				return tx.Create(&agent.AgentConfig).Error
+			}
+			return err
+		}
+
+		existingConfig.Config = agent.AgentConfig.Config
+		existingConfig.CollectUnixLogs = agent.AgentConfig.CollectUnixLogs
+		existingConfig.CollectUnixNodeMetrics = agent.AgentConfig.CollectUnixNodeMetrics
+		existingConfig.CollectWinLogs = agent.AgentConfig.CollectWinLogs
+		existingConfig.CollectWinNodeMetrics = agent.AgentConfig.CollectWinNodeMetrics
+		existingConfig.CollectCadvisorMetrics = agent.AgentConfig.CollectCadvisorMetrics
+		existingConfig.CollectKubernetesMetrics = agent.AgentConfig.CollectKubernetesMetrics
+
+		return tx.Save(&existingConfig).Error
+	})
+
+	if err != nil {
+		fmt.Println("error upserting agent:", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
 // registerRoutes takes a *http.ServeMux and registers some HTTP handlers.
 func (a *App) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/ping", a.handlePing)
 	mux.HandleFunc("/echo", a.handleEcho)
-	mux.HandleFunc("/collector", a.getCollector)
+
+	collectorHandler := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			a.getCollector(w, r)
+			return
+		}
+
+		if r.Method == http.MethodPost {
+			a.createOrUpdateAgent(w, r)
+			return
+		}
+
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+
+	mux.HandleFunc("/collector", collectorHandler)
+	//mux.HandleFunc("/collector/", collectorHandler)
 }

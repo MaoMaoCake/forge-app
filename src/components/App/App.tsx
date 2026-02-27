@@ -22,9 +22,9 @@ function App(props: AppRootProps) {
       {/* Default page */}
       <Route path="*" element={<PageOne />} />
       <Route path={ROUTES.dashboard} element={<PageOverview />} />
-      <Route path={ROUTES.config} element={<PageConfig />}/>
-      <Route path={ROUTES.create} element={<PageCreate />}/>
-
+      {/* Edit page with UUID param, reached from overview */}
+      <Route path={`${ROUTES.config}/:uuid`} element={<PageConfig />} />
+      <Route path={ROUTES.create} element={<PageCreate />} />
     </Routes>
   );
 }

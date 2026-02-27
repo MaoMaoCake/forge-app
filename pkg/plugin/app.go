@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -31,25 +32,60 @@ type App struct {
 	DB *gorm.DB
 }
 
+// NullString wraps sql.NullString to support JSON (de)serialization from/to
+// plain JSON strings. It treats null or empty string as invalid.
+type NullString struct {
+	sql.NullString
+}
+
+func (ns *NullString) UnmarshalJSON(data []byte) error {
+	// Handle JSON null
+	if string(data) == "null" {
+		ns.Valid = false
+		ns.String = ""
+		return nil
+	}
+
+	// Expect a JSON string
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		// If it's not a string, mark invalid but don't hard-fail
+		ns.Valid = false
+		ns.String = ""
+		return nil
+	}
+
+	ns.String = s
+	ns.Valid = s != ""
+	return nil
+}
+
+func (ns NullString) MarshalJSON() ([]byte, error) {
+	if !ns.Valid {
+		return json.Marshal("")
+	}
+	return json.Marshal(ns.String)
+}
+
 type Agent struct {
 	gorm.Model
-	Name        string `gorm:"type:varchar(100);not null"`
-	AgentUUID   string `gorm:"uniqueIndex"`
-	LastSeen    time.Time
-	Advanced    bool `gorm:"default:false"`
-	AgentConfig AgentConfig
+	Name        string      `gorm:"type:varchar(100);not null" json:"name"`
+	AgentUUID   string      `gorm:"uniqueIndex" json:"agent_uuid"`
+	LastSeen    time.Time   `json:"last_seen,omitempty"`
+	Advanced    bool        `gorm:"default:false" json:"advanced"`
+	AgentConfig AgentConfig `json:"agent_config"`
 }
 
 type AgentConfig struct {
 	gorm.Model
-	AgentID                  uint
-	Config                   sql.NullString // if Advanced is true read this. Otherwise, Render according to flags
-	CollectUnixLogs          bool           `gorm:"default:false"`
-	CollectUnixNodeMetrics   bool           `gorm:"default:false"`
-	CollectWinLogs           bool           `gorm:"default:false"`
-	CollectWinNodeMetrics    bool           `gorm:"default:false"`
-	CollectCadvisorMetrics   bool           `gorm:"default:false"`
-	CollectKubernetesMetrics bool           `gorm:"default:false"`
+	AgentID                  uint       `json:"-"`
+	Config                   NullString `json:"config"`
+	CollectUnixLogs          bool       `gorm:"default:false" json:"collectUnixLogs"`
+	CollectUnixNodeMetrics   bool       `gorm:"default:false" json:"collectUnixNodeMetrics"`
+	CollectWinLogs           bool       `gorm:"default:false" json:"collectWinLogs"`
+	CollectWinNodeMetrics    bool       `gorm:"default:false" json:"collectWinNodeMetrics"`
+	CollectCadvisorMetrics   bool       `gorm:"default:false" json:"collectCadvisorMetrics"`
+	CollectKubernetesMetrics bool       `gorm:"default:false" json:"collectKubernetesMetrics"`
 }
 
 // NewApp creates a new example *App instance.
