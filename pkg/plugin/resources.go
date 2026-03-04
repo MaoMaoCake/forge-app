@@ -1,13 +1,52 @@
 package plugin
 
 import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"strings"
+	"time"
 
+	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
+
+	connect "connectrpc.com/connect"
+	v1 "github.com/grafana/alloy-remote-config/api/gen/proto/go/collector/v1"
+	collectorv1connect "github.com/grafana/alloy-remote-config/api/gen/proto/go/collector/v1/collectorv1connect"
 )
+
+const (
+	configTemplateName = "config.alloy.tpl"
+	defaultTenantID    = "default"
+)
+
+type serviceEndpoint struct {
+	URL string `json:"url"`
+}
+
+type LGTMCFG struct {
+	Mimir serviceEndpoint `json:"mimir"`
+	Loki  serviceEndpoint `json:"loki"`
+	Tempo serviceEndpoint `json:"tempo"`
+}
+
+type Features struct {
+	SelfMonitor      bool
+	LinuxMonitor     bool
+	WindowsMonitor   bool
+	ContainerMonitor bool
+	JournalLog       bool
+	WindowsEventLog  bool
+	DockerLog        bool
+	FileMonitor      bool
+}
 
 // handlePing is an example HTTP GET resource that returns a {"message": "ok"} JSON response.
 func (a *App) handlePing(w http.ResponseWriter, req *http.Request) {
@@ -157,8 +196,113 @@ func (a *App) createOrUpdateAgent(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+func (a *App) GetConfig(ctx context.Context, req *connect.Request[v1.GetConfigRequest]) (*connect.Response[v1.GetConfigResponse], error) {
+	if req == nil || req.Msg == nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("request payload is required"))
+	}
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("collector id is required"))
+	}
+
+	tenantID := tenantIDFromAttrs(req.Msg.LocalAttributes)
+	if tenantID == "" {
+		tenantID = os.Getenv("DEFAULT_TENANT_ID")
+	}
+	if tenantID == "" {
+		tenantID = defaultTenantID
+	}
+
+	body, err := a.render(ctx, req, tenantID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	hash := hashConfig(body)
+	if req.Msg.Hash != "" && req.Msg.Hash == hash {
+		return connect.NewResponse(&v1.GetConfigResponse{
+			Hash:        hash,
+			NotModified: true,
+		}), nil
+	}
+
+	return connect.NewResponse(&v1.GetConfigResponse{
+		Content: body,
+		Hash:    hash,
+	}), nil
+}
+
+func (a *App) RegisterCollector(ctx context.Context, req *connect.Request[v1.RegisterCollectorRequest]) (*connect.Response[v1.RegisterCollectorResponse], error) {
+	log.Printf("RegisterCollector: id=%s local_attrs=%v", req.Msg.Id, req.Msg.LocalAttributes)
+	return connect.NewResponse(&v1.RegisterCollectorResponse{}), nil
+}
+
+func (s *App) render(ctx context.Context, req *connect.Request[v1.GetConfigRequest], tenantID string) (string, error) {
+	if s.rdb == nil {
+		return "", fmt.Errorf("redis client not initialized")
+	}
+	if s.tmpl == nil {
+		return "", fmt.Errorf("template bundle not initialized")
+	}
+
+	featureKey := fmt.Sprintf("nova:feat:%s:%s", tenantID, req.Msg.Id)
+	featureString, err := s.rdb.Get(ctx, featureKey).Result()
+	var features Features
+	if err != nil {
+		if err != redis.Nil {
+			return "", fmt.Errorf("fetch features: %w", err)
+		}
+	} else {
+		features, err = parseFeatures(featureString)
+		if err != nil {
+			return "", fmt.Errorf("parse features: %w", err)
+		}
+	}
+
+	credentials := map[string]string{
+		"mimir_password": os.Getenv("MIMIR_PASSWORD"),
+		"loki_password":  os.Getenv("LOKI_PASSWORD"),
+		"tempo_password": os.Getenv("TEMPO_PASSWORD"),
+	}
+	for key, value := range credentials {
+		if value == "" {
+			credentials[key] = "password"
+		}
+	}
+
+	lgtmcfg := LGTMCFG{
+		Mimir: serviceEndpoint{URL: os.Getenv("MIMIR_URL")},
+		Loki:  serviceEndpoint{URL: os.Getenv("LOKI_URL")},
+		Tempo: serviceEndpoint{URL: os.Getenv("TEMPO_URL")},
+	}
+
+	data := map[string]any{
+		"TenantID":       tenantID,
+		"ID":             req.Msg.Id,
+		"LocalAttrs":     req.Msg.LocalAttributes,
+		"RequestedHash":  req.Msg.Hash,
+		"RequestedAtUTC": time.Now().UTC().Format(time.RFC3339),
+		"Features":       features,
+		"Credentials":    credentials,
+		"LGTMCfg":        lgtmcfg,
+	}
+	var buf bytes.Buffer
+	if err := s.tmpl.ExecuteTemplate(&buf, configTemplateName, data); err != nil {
+		return "", fmt.Errorf("render template: %w", err)
+	}
+	return buf.String(), nil
+}
+
+func (a *App) UnregisterCollector(ctx context.Context, req *connect.Request[v1.UnregisterCollectorRequest]) (*connect.Response[v1.UnregisterCollectorResponse], error) {
+	log.Printf("UnregisterCollector: id=%s", req.Msg.Id)
+	return connect.NewResponse(&v1.UnregisterCollectorResponse{}), nil
+}
+
 // registerRoutes takes a *http.ServeMux and registers some HTTP handlers.
 func (a *App) registerRoutes(mux *http.ServeMux) {
+	path, handler := collectorv1connect.NewCollectorServiceHandler(a)
+	fmt.Println(path)
+	mux.Handle(path, handler)
+
 	mux.HandleFunc("/ping", a.handlePing)
 	mux.HandleFunc("/echo", a.handleEcho)
 
@@ -177,4 +321,71 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	}
 
 	mux.HandleFunc("/collector", collectorHandler)
+}
+
+func parseFeatures(raw string) (Features, error) {
+	if strings.TrimSpace(raw) == "" {
+		return Features{}, nil
+	}
+
+	var generic map[string]bool
+	if err := json.Unmarshal([]byte(raw), &generic); err == nil {
+		return featuresFromMap(generic), nil
+	}
+
+	var structured Features
+	if err := json.Unmarshal([]byte(raw), &structured); err != nil {
+		return Features{}, err
+	}
+	return structured, nil
+}
+
+func featuresFromMap(in map[string]bool) Features {
+	var f Features
+	for key, value := range in {
+		switch strings.ToLower(key) {
+		case "selfmonitor", "self_monitor":
+			f.SelfMonitor = value
+		case "linuxmonitor", "linux_monitor":
+			f.LinuxMonitor = value
+		case "windowsmonitor", "windows_monitor":
+			f.WindowsMonitor = value
+		case "containermonitor", "container_monitor":
+			f.ContainerMonitor = value
+		case "journallog", "journal_log":
+			f.JournalLog = value
+		case "windowseventlog", "windows_event_log":
+			f.WindowsEventLog = value
+		case "dockerlog", "docker_log":
+			f.DockerLog = value
+		case "filemonitor", "file_monitor":
+			f.FileMonitor = value
+		}
+	}
+	return f
+}
+
+func tenantIDFromAttrs(attrs map[string]string) string {
+	if len(attrs) == 0 {
+		return ""
+	}
+	preferred := []string{"tenant_id", "tenantId", "tenant", "org_id", "orgId", "x-scope-orgid"}
+	for _, key := range preferred {
+		if val, ok := attrs[key]; ok && val != "" {
+			return val
+		}
+	}
+	for key, val := range attrs {
+		if strings.EqualFold(key, "tenant") || strings.EqualFold(key, "tenant_id") || strings.EqualFold(key, "x-scope-orgid") {
+			if val != "" {
+				return val
+			}
+		}
+	}
+	return ""
+}
+
+func hashConfig(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
 }

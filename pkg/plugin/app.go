@@ -3,9 +3,11 @@ package plugin
 import (
 	"context"
 	"database/sql"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"text/template"
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
@@ -14,7 +16,12 @@ import (
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+
+	redis "github.com/redis/go-redis/v9"
 )
+
+//go:embed template/*.tpl
+var templateFS embed.FS
 
 // Make sure App implements required interfaces. This is important to do
 // since otherwise we will only get a not implemented error response from plugin in
@@ -29,7 +36,9 @@ var (
 // App is an example app plugin with a backend which can respond to data queries.
 type App struct {
 	backend.CallResourceHandler
-	DB *gorm.DB
+	DB   *gorm.DB
+	rdb  *redis.Client
+	tmpl *template.Template
 }
 
 // NullString wraps sql.NullString to support JSON (de)serialization from/to
@@ -105,6 +114,10 @@ func NewApp(_ context.Context, settings backend.AppInstanceSettings) (instancemg
 	if !ok || dsn == "" {
 		return nil, fmt.Errorf("postgres DSN not configured; please set it in the plugin configuration page")
 	}
+	//redis_url, ok := settings.DecryptedSecureJSONData["redis_url"]
+	//if !ok || redis_url == "" {
+	//	return nil, fmt.Errorf("redis URL not configured; please set it in the plugin configuration page")
+	//}
 
 	fmt.Println("Initializing Postgres database with DSN", dsn)
 
@@ -122,6 +135,17 @@ func NewApp(_ context.Context, settings backend.AppInstanceSettings) (instancemg
 	}
 
 	app.DB = db
+
+	// Parse templates from folder; use embedded assets so path lookup works in all environments
+	tmpl := template.Must(template.ParseFS(templateFS, "template/*.tpl"))
+
+	// Set up Redis
+	rdb := redis.NewClient(&redis.Options{
+		Addr: "redis:6379",
+	})
+	app.rdb = rdb
+	app.tmpl = tmpl
+
 	return &app, nil
 }
 
