@@ -114,10 +114,10 @@ func NewApp(_ context.Context, settings backend.AppInstanceSettings) (instancemg
 	if !ok || dsn == "" {
 		return nil, fmt.Errorf("postgres DSN not configured; please set it in the plugin configuration page")
 	}
-	//redis_url, ok := settings.DecryptedSecureJSONData["redis_url"]
-	//if !ok || redis_url == "" {
-	//	return nil, fmt.Errorf("redis URL not configured; please set it in the plugin configuration page")
-	//}
+	redisURL, ok := settings.DecryptedSecureJSONData["redis_url"]
+	if !ok || redisURL == "" {
+		return nil, fmt.Errorf("redis URL not configured; please set it in the plugin configuration page")
+	}
 
 	fmt.Println("Initializing Postgres database with DSN", dsn)
 
@@ -139,10 +139,12 @@ func NewApp(_ context.Context, settings backend.AppInstanceSettings) (instancemg
 	// Parse templates from folder; use embedded assets so path lookup works in all environments
 	tmpl := template.Must(template.ParseFS(templateFS, "template/*.tpl"))
 
-	// Set up Redis
-	rdb := redis.NewClient(&redis.Options{
-		Addr: "redis:6379",
-	})
+	opts, err := redis.ParseURL(redisURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse redis url: %w", err)
+	}
+
+	rdb := redis.NewClient(opts)
 	app.rdb = rdb
 	app.tmpl = tmpl
 

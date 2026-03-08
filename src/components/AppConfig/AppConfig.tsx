@@ -8,12 +8,14 @@ import { testIds } from '../testIds';
 
 type AppPluginSettings = {
   postgresDsn?: string;
+  redis_url?: string;
 };
 
 type State = {
-  // Tells us if the API key secret is set.
-  isApiKeySet: boolean;
+  postgresDsnSet: boolean;
+  redis_url_set: boolean;
   postgresDsn: string;
+  redis_url: string;
 };
 
 export interface AppConfigProps extends PluginConfigPageProps<AppPluginMeta<AppPluginSettings>> {}
@@ -22,18 +24,27 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
   const s = useStyles2(getStyles);
   const { enabled, pinned, jsonData, secureJsonFields } = plugin.meta;
   const [state, setState] = useState<State>({
-    isApiKeySet: Boolean(secureJsonFields?.apiKey),
-    // New: load DSN from jsonData
-    postgresDsn: (jsonData as any)?.postgresDsn || '',
-  } as State & { postgresDsn: string });
+    postgresDsnSet: Boolean(secureJsonFields?.postgresDsn),
+    redis_url_set: Boolean(secureJsonFields?.redis_url),
+    postgresDsn: secureJsonFields?.postgresDsn ? '' : (jsonData as any)?.postgresDsn || '',
+    redis_url: secureJsonFields?.redis_url ? '' : (jsonData as any)?.redis_url || '',
+  });
 
-  const isSubmitDisabled = Boolean((!state.isApiKeySet && !state.postgresDsn));
+  const isSubmitDisabled =
+    (!state.postgresDsnSet && !state.postgresDsn) || (!state.redis_url_set && !state.redis_url);
 
-  const onResetApiKey = () =>
+  const onResetPostgresDsn = () =>
     setState({
       ...state,
       postgresDsn: '',
-      isApiKeySet: false,
+      postgresDsnSet: false,
+    });
+
+  const onResetRedisUrl = () =>
+    setState({
+      ...state,
+      redis_url: '',
+      redis_url_set: false,
     });
 
   const onChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -48,18 +59,21 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
       return;
     }
 
+    const secureJsonData: Record<string, string> = {};
+
+    if (!state.postgresDsnSet) {
+      secureJsonData.postgresDsn = state.postgresDsn;
+    }
+
+    if (!state.redis_url_set) {
+      secureJsonData.redis_url = state.redis_url;
+    }
+
     updatePluginAndReload(plugin.meta.id, {
       enabled,
       pinned,
-      jsonData: {
-      },
-      // This cannot be queried later by the frontend.
-      // We don't want to override it in case it was set previously and left untouched now.
-      secureJsonData: state.isApiKeySet
-        ? undefined
-        : {
-            postgresDsn: (state as any).postgresDsn,
-          },
+      jsonData: {},
+      secureJsonData: Object.keys(secureJsonData).length ? secureJsonData : undefined,
     });
   };
 
@@ -75,11 +89,28 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
             width={60}
             name="postgresDsn"
             id="config-postgres-dsn"
-            value={(state as any).postgresDsn}
-            isConfigured={state.isApiKeySet}
+            value={state.postgresDsn}
+            isConfigured={state.postgresDsnSet}
             placeholder={`E.g.: host=localhost user=forge password=secret dbname=forge sslmode=disable`}
             onChange={onChange}
-            onReset={onResetApiKey}
+            onReset={onResetPostgresDsn}
+          />
+        </Field>
+
+        <Field
+          label="Redis URL"
+          description="Connection string used by the backend to connect to Redis"
+          className={s.marginTop}
+        >
+          <SecretInput
+            width={60}
+            name="redis_url"
+            id="config-redis-url"
+            value={state.redis_url}
+            isConfigured={state.redis_url_set}
+            placeholder={`E.g.: redis://:password@localhost:6379/0`}
+            onChange={onChange}
+            onReset={onResetRedisUrl}
           />
         </Field>
 

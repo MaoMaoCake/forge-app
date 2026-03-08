@@ -24,15 +24,17 @@ describe('Components/AppConfig', () => {
     } as unknown as AppConfigProps;
   });
 
-  test('renders the "API Settings" fieldset with API key, API url inputs and button', () => {
+  test('renders Forge settings with Postgres and Redis secure inputs', () => {
     const plugin = { meta: { ...props.plugin.meta, enabled: false } };
 
     // @ts-ignore - We don't need to provide `addConfigPage()` and `setChannelSupport()` for these tests
     render(<AppConfig plugin={plugin} query={props.query} />);
 
-    expect(screen.queryByRole('group', { name: /api settings/i })).toBeInTheDocument();
-    expect(screen.queryByTestId(testIds.appConfig.apiKey)).toBeInTheDocument();
-    expect(screen.queryByTestId(testIds.appConfig.apiUrl)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /save api settings/i })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: /forge settings/i })).toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText(/host=localhost user=forge password=secret dbname=forge sslmode=disable/i)
+    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/redis:\/\/:password@localhost:6379\/0/i)).toBeInTheDocument();
+    expect(screen.getByTestId(testIds.appConfig.submit)).toBeDisabled();
   });
 });
