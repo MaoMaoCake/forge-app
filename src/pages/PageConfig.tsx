@@ -302,8 +302,8 @@ function PageConfig() {
           </Field>
 
           <Field
-            label="Raw Config JSON"
-            description="Optional raw configuration blob to store along with this collector."
+            label="Raw Config"
+            description="Alloy config for this collector. This is only used if advanced is enabled."
           >
             <TextArea
               rows={6}
