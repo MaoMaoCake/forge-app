@@ -10,4 +10,5 @@ export enum ROUTES {
   config = 'config',
   create = 'create',
   dashboard = 'dashboard',
+  install = 'install',
 }

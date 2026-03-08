@@ -78,6 +78,14 @@ function PageOverview() {
     return prefixRoute(`${ROUTES.config}/${id}`);
   };
 
+  const getInstallHref = (agent: Agent) => {
+    const id = agent.agent_uuid || agent.uuid;
+    if (!id) {
+      return undefined;
+    }
+    return prefixRoute(`${ROUTES.install}/${id}`);
+  };
+
   return (
     <PluginPage>
       <div className={s.container} data-testid={testIds.pageOverview.container}>
@@ -105,6 +113,7 @@ function PageOverview() {
               <ul className={s.list} data-testid={testIds.pageOverview.list}>
                 {agents.map((agent, idx) => {
                   const editHref = getEditHref(agent);
+                  const installHref = getInstallHref(agent);
                   return (
                     <li
                       key={agent.agent_uuid || agent.uuid || agent.id || idx}
@@ -113,10 +122,19 @@ function PageOverview() {
                     >
                       <div className={s.listItemInner}>
                         {renderAgentName(agent, idx)}
-                        {editHref && (
-                          <LinkButton variant="secondary" size="sm" href={editHref}>
-                            Edit
-                          </LinkButton>
+                        {(editHref || installHref) && (
+                          <div className={s.actionGroup}>
+                            {editHref && (
+                              <LinkButton variant="secondary" size="sm" href={editHref}>
+                                Edit
+                              </LinkButton>
+                            )}
+                            {installHref && (
+                              <LinkButton variant="secondary" size="sm" href={installHref}>
+                                Install
+                              </LinkButton>
+                            )}
+                          </div>
                         )}
                       </div>
                     </li>
@@ -151,6 +169,11 @@ const getStyles = (theme: GrafanaTheme2) => ({
     align-items: center;
     justify-content: space-between;
     gap: ${theme.spacing(2)};
+  `,
+  actionGroup: css`
+    display: flex;
+    align-items: center;
+    gap: ${theme.spacing(1)};
   `,
   description: css`
     color: ${theme.colors.text.secondary};
