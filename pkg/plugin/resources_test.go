@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
+	"github.com/grafana/grafana-plugin-sdk-go/backend/resource/httpadapter"
 	"net/http"
 	"testing"
 )
@@ -23,18 +24,11 @@ func (s *mockCallResourceResponseSender) Send(response *backend.CallResourceResp
 // TestCallResource tests CallResource calls, using backend.CallResourceRequest and backend.CallResourceResponse.
 // This ensures the httpadapter for CallResource works correctly.
 func TestCallResource(t *testing.T) {
-	// Initialize app
-	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{})
-	if err != nil {
-		t.Fatalf("new app: %s", err)
-	}
-	if inst == nil {
-		t.Fatal("inst must not be nil")
-	}
-	app, ok := inst.(*App)
-	if !ok {
-		t.Fatal("inst must be of type *App")
-	}
+	// Build a minimal app instance for routing tests without requiring external services.
+	app := &App{}
+	mux := http.NewServeMux()
+	app.registerRoutes(mux)
+	app.CallResourceHandler = httpadapter.New(mux)
 
 	// Set up and run test cases
 	for _, tc := range []struct {
@@ -77,7 +71,7 @@ func TestCallResource(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Request by calling CallResource. This tests the httpadapter.
 			var r mockCallResourceResponseSender
-			err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+			err := app.CallResource(context.Background(), &backend.CallResourceRequest{
 				Method: tc.method,
 				Path:   tc.path,
 				Body:   tc.body,
