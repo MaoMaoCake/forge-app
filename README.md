@@ -134,3 +134,6 @@ Below you can find source code for existing app plugins and other related docume
 - [Basic app plugin example](https://github.com/grafana/grafana-plugin-examples/tree/master/examples/app-basic#readme)
 - [`plugin.json` documentation](https://grafana.com/developers/plugin-tools/reference/plugin-jsonplugin-json)
 - [Sign a plugin](https://grafana.com/developers/plugin-tools/publish-a-plugin/sign-a-plugin)
+
+host=postgres user=grafana password=grafana dbname=grafana
+redis://redis:6379/0
