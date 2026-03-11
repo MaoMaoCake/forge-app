@@ -26,7 +26,7 @@ const (
 	configTemplateName = "config.alloy.tpl"
 	defaultTenantID    = "default"
 	// Can be overridden with REDIS_RENDERED_CONFIG_KEY_TEMPLATE env var.
-	defaultRenderedConfigKeyTemplate = "nova:cfg:%s:%s"
+	defaultRenderedConfigKeyTemplate = "forge:cfg:%s:%s"
 )
 
 var errCollectorNotFound = errors.New("collector not found")
@@ -163,9 +163,7 @@ func (a *App) createOrUpdateAgent(w http.ResponseWriter, req *http.Request) {
 				if agent.LastSeen.IsZero() {
 					agent.LastSeen = now
 				}
-				if strings.TrimSpace(agent.Name) == "" {
-					agent.Name = agent.AgentUUID
-				}
+				agent.Name = firstNonEmpty(agent.Name, agent.AgentUUID)
 				return tx.Create(&agent).Error
 			}
 			return err
@@ -190,25 +188,7 @@ func (a *App) createOrUpdateAgent(w http.ResponseWriter, req *http.Request) {
 			return err
 		}
 
-		// Upsert AgentConfig
-		var existingConfig AgentConfig
-		if err := tx.Where("agent_id = ?", existing.ID).First(&existingConfig).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				agent.AgentConfig.AgentID = existing.ID
-				return tx.Create(&agent.AgentConfig).Error
-			}
-			return err
-		}
-
-		existingConfig.Config = agent.AgentConfig.Config
-		existingConfig.CollectUnixLogs = agent.AgentConfig.CollectUnixLogs
-		existingConfig.CollectUnixNodeMetrics = agent.AgentConfig.CollectUnixNodeMetrics
-		existingConfig.CollectWinLogs = agent.AgentConfig.CollectWinLogs
-		existingConfig.CollectWinNodeMetrics = agent.AgentConfig.CollectWinNodeMetrics
-		existingConfig.CollectCadvisorMetrics = agent.AgentConfig.CollectCadvisorMetrics
-		existingConfig.CollectKubernetesMetrics = agent.AgentConfig.CollectKubernetesMetrics
-
-		return tx.Save(&existingConfig).Error
+		return upsertAgentConfig(tx, existing.ID, agent.AgentConfig)
 	})
 
 	if err != nil {
@@ -228,18 +208,27 @@ func (a *App) createOrUpdateAgent(w http.ResponseWriter, req *http.Request) {
 }
 
 func (a *App) GetConfig(ctx context.Context, req *connect.Request[v1.GetConfigRequest]) (*connect.Response[v1.GetConfigResponse], error) {
-	if req == nil || req.Msg == nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("request payload is required"))
+	msg, err := connectRequestMessage(req)
+	if err != nil {
+		return nil, err
 	}
-	collectorID := strings.TrimSpace(req.Msg.Id)
-	if collectorID == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("collector id is required"))
+
+	collectorID, err := requiredCollectorID(msg.Id)
+	if err != nil {
+		return nil, err
 	}
-	req.Msg.Id = collectorID
+	msg.Id = collectorID
 
-	tenantID := resolveTenantID(tenantIDFromAttrs(req.Msg.LocalAttributes))
+	tenantID := resolveTenantID(tenantIDFromAttrs(msg.LocalAttributes))
 
-	body, err := a.render(ctx, req, tenantID)
+	body, err := a.renderAndStoreCollectorConfig(
+		ctx,
+		tenantID,
+		collectorID,
+		msg.LocalAttributes,
+		msg.Hash,
+		false,
+	)
 	if err != nil {
 		if errors.Is(err, errCollectorNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("collector %q not found", collectorID))
@@ -251,7 +240,7 @@ func (a *App) GetConfig(ctx context.Context, req *connect.Request[v1.GetConfigRe
 	}
 
 	hash := hashConfig(body)
-	if req.Msg.Hash != "" && req.Msg.Hash == hash {
+	if msg.Hash != "" && msg.Hash == hash {
 		return connect.NewResponse(&v1.GetConfigResponse{
 			Hash:        hash,
 			NotModified: true,
@@ -265,34 +254,33 @@ func (a *App) GetConfig(ctx context.Context, req *connect.Request[v1.GetConfigRe
 }
 
 func (a *App) RegisterCollector(ctx context.Context, req *connect.Request[v1.RegisterCollectorRequest]) (*connect.Response[v1.RegisterCollectorResponse], error) {
-	if req == nil || req.Msg == nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("request payload is required"))
+	msg, err := connectRequestMessage(req)
+	if err != nil {
+		return nil, err
 	}
-	collectorID := strings.TrimSpace(req.Msg.Id)
-	if collectorID == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("collector id is required"))
+
+	collectorID, err := requiredCollectorID(msg.Id)
+	if err != nil {
+		return nil, err
 	}
 	if a.DB == nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("database not initialized"))
 	}
 
-	log.Printf("RegisterCollector: id=%s local_attrs=%v", collectorID, req.Msg.LocalAttributes)
-	version := collectorVersionFromAttrs(req.Msg.LocalAttributes)
+	log.Printf("RegisterCollector: id=%s local_attrs=%v", collectorID, msg.LocalAttributes)
+	version := collectorVersionFromAttrs(msg.LocalAttributes)
 	if version == "" {
-		version = collectorVersionFromAttrs(req.Msg.Attributes)
+		version = collectorVersionFromAttrs(msg.Attributes)
 	}
+	requestedName := strings.TrimSpace(msg.Name)
 
 	now := time.Now().UTC()
-	err := a.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = a.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing Agent
 		err := tx.Where("agent_uuid = ?", collectorID).First(&existing).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			name := strings.TrimSpace(req.Msg.Name)
-			if name == "" {
-				name = collectorID
-			}
 			return tx.Create(&Agent{
-				Name:            name,
+				Name:            firstNonEmpty(requestedName, collectorID),
 				AgentUUID:       collectorID,
 				LastSeen:        now,
 				LastSeenVersion: version,
@@ -306,8 +294,8 @@ func (a *App) RegisterCollector(ctx context.Context, req *connect.Request[v1.Reg
 		if version != "" && version != existing.LastSeenVersion {
 			existing.LastSeenVersion = version
 		}
-		if name := strings.TrimSpace(req.Msg.Name); name != "" {
-			existing.Name = name
+		if requestedName != "" {
+			existing.Name = requestedName
 		} else if strings.TrimSpace(existing.Name) == "" {
 			existing.Name = collectorID
 		}
@@ -318,6 +306,21 @@ func (a *App) RegisterCollector(ctx context.Context, req *connect.Request[v1.Reg
 	}
 
 	return connect.NewResponse(&v1.RegisterCollectorResponse{}), nil
+}
+
+func connectRequestMessage[T any](req *connect.Request[T]) (*T, error) {
+	if req == nil || req.Msg == nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("request payload is required"))
+	}
+	return req.Msg, nil
+}
+
+func requiredCollectorID(raw string) (string, error) {
+	collectorID := strings.TrimSpace(raw)
+	if collectorID == "" {
+		return "", connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("collector id is required"))
+	}
+	return collectorID, nil
 }
 
 func (a *App) updateCollectorLastSeen(ctx context.Context, collectorID string) error {
@@ -337,24 +340,14 @@ func (a *App) updateCollectorLastSeen(ctx context.Context, collectorID string) e
 	return nil
 }
 
-func (a *App) render(ctx context.Context, req *connect.Request[v1.GetConfigRequest], tenantID string) (string, error) {
-	return a.renderAndStoreCollectorConfig(
-		ctx,
-		tenantID,
-		req.Msg.Id,
-		req.Msg.LocalAttributes,
-		req.Msg.Hash,
-		false,
-	)
-}
-
 func (a *App) UnregisterCollector(ctx context.Context, req *connect.Request[v1.UnregisterCollectorRequest]) (*connect.Response[v1.UnregisterCollectorResponse], error) {
-	if req == nil || req.Msg == nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("request payload is required"))
+	msg, err := connectRequestMessage(req)
+	if err != nil {
+		return nil, err
 	}
-	collectorID := strings.TrimSpace(req.Msg.Id)
-	if collectorID == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("collector id is required"))
+	collectorID, err := requiredCollectorID(msg.Id)
+	if err != nil {
+		return nil, err
 	}
 	log.Printf("UnregisterCollector: id=%s", collectorID)
 	return connect.NewResponse(&v1.UnregisterCollectorResponse{}), nil
@@ -384,6 +377,30 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	}
 
 	mux.HandleFunc("/collector", collectorHandler)
+}
+
+func upsertAgentConfig(tx *gorm.DB, agentID uint, incoming AgentConfig) error {
+	var existing AgentConfig
+	if err := tx.Where("agent_id = ?", agentID).First(&existing).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			incoming.AgentID = agentID
+			return tx.Create(&incoming).Error
+		}
+		return err
+	}
+
+	applyAgentConfigUpdates(&existing, incoming)
+	return tx.Save(&existing).Error
+}
+
+func applyAgentConfigUpdates(dst *AgentConfig, src AgentConfig) {
+	dst.Config = src.Config
+	dst.CollectUnixLogs = src.CollectUnixLogs
+	dst.CollectUnixNodeMetrics = src.CollectUnixNodeMetrics
+	dst.CollectWinLogs = src.CollectWinLogs
+	dst.CollectWinNodeMetrics = src.CollectWinNodeMetrics
+	dst.CollectCadvisorMetrics = src.CollectCadvisorMetrics
+	dst.CollectKubernetesMetrics = src.CollectKubernetesMetrics
 }
 
 func parseFeatures(raw string) (Features, error) {
@@ -607,42 +624,37 @@ func resolveTenantID(candidate string) string {
 }
 
 func tenantIDFromAttrs(attrs map[string]string) string {
-	if len(attrs) == 0 {
-		return ""
-	}
-	preferred := []string{"tenant_id", "tenantId", "tenant", "org_id", "orgId", "x-scope-orgid"}
-	for _, key := range preferred {
-		if val, ok := attrs[key]; ok && val != "" {
-			return val
-		}
-	}
-	for key, val := range attrs {
-		if strings.EqualFold(key, "tenant") || strings.EqualFold(key, "tenant_id") || strings.EqualFold(key, "x-scope-orgid") {
-			if val != "" {
-				return val
-			}
-		}
-	}
-	return ""
+	return firstMatchingAttrValue(
+		attrs,
+		[]string{"tenant_id", "tenantId", "tenant", "org_id", "orgId", "x-scope-orgid"},
+		isTenantIDKey,
+	)
 }
 
 func collectorVersionFromAttrs(attrs map[string]string) string {
+	return firstMatchingAttrValue(
+		attrs,
+		[]string{
+			"collector.version",
+			"collector_version",
+			"collectorVersion",
+			"alloy.version",
+			"alloy_version",
+			"alloyVersion",
+			"service.version",
+			"service_version",
+			"serviceVersion",
+			"version",
+		},
+		isCollectorVersionKey,
+	)
+}
+
+func firstMatchingAttrValue(attrs map[string]string, preferred []string, fallbackMatcher func(string) bool) string {
 	if len(attrs) == 0 {
 		return ""
 	}
 
-	preferred := []string{
-		"collector.version",
-		"collector_version",
-		"collectorVersion",
-		"alloy.version",
-		"alloy_version",
-		"alloyVersion",
-		"service.version",
-		"service_version",
-		"serviceVersion",
-		"version",
-	}
 	for _, key := range preferred {
 		if value, ok := attrs[key]; ok {
 			if trimmed := strings.TrimSpace(value); trimmed != "" {
@@ -652,7 +664,7 @@ func collectorVersionFromAttrs(attrs map[string]string) string {
 	}
 
 	for key, value := range attrs {
-		if !isCollectorVersionKey(key) {
+		if !fallbackMatcher(key) {
 			continue
 		}
 		if trimmed := strings.TrimSpace(value); trimmed != "" {
@@ -660,6 +672,19 @@ func collectorVersionFromAttrs(attrs map[string]string) string {
 		}
 	}
 	return ""
+}
+
+func isTenantIDKey(key string) bool {
+	switch {
+	case strings.EqualFold(key, "tenant"):
+		return true
+	case strings.EqualFold(key, "tenant_id"):
+		return true
+	case strings.EqualFold(key, "x-scope-orgid"):
+		return true
+	default:
+		return false
+	}
 }
 
 func isCollectorVersionKey(key string) bool {
