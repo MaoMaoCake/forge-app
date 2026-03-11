@@ -12,8 +12,59 @@ services:
       POSTGRES_PASSWORD: grafana
       POSTGRES_DB: grafana
     volumes:
-      - ./data/postgres:/var/lib/postgresql
+      - postgres_data:/var/lib/postgresql
   redis:
     image: docker.dragonflydb.io/dragonflydb/dragonfly
     ports:
       - 6379:6379
+  mimir:
+    image: grafana/mimir:latest
+    command:
+      - -config.file=/etc/mimir/mimir.yaml
+      - -auth.multitenancy-enabled=false
+    ports:
+      - 9009:9009
+    volumes:
+      - ./cfg/mimir.yaml:/etc/mimir/mimir.yaml:ro
+      - mimir_data:/data
+  loki:
+    image: grafana/loki:latest
+    command:
+      - -config.file=/etc/loki/loki.yaml
+    ports:
+      - 3100:3100
+    volumes:
+      - ./cfg/loki.yaml:/etc/loki/loki.yaml:ro
+      - loki_data:/loki
+  tempo:
+    image: grafana/tempo:latest
+    command:
+      - -config.file=/etc/tempo.yaml
+    ports:
+      - 3200:3200
+      - 4317:4317
+      - 4318:4318
+    volumes:
+      - ./cfg/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/tmp/tempo
+  alloy:
+    image: grafana/alloy:latest
+    ports:
+      - 12345:12345
+    depends_on:
+      - grafana
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./cfg/config.alloy:/etc/alloy/config.alloy:ro
+      - alloy_data:/var/lib/alloy/data
+
+volumes:
+  postgres_data:
+  mimir_data:
+  loki_data:
+  tempo_data:
+  alloy_data:
