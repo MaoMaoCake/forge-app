@@ -217,6 +217,13 @@ func (a *App) createOrUpdateAgent(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	tenantID := resolveTenantID("")
+	if _, err := a.renderAndStoreCollectorConfig(req.Context(), tenantID, agent.AgentUUID, nil, "", true); err != nil {
+		fmt.Println("error rendering/storing collector config:", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -230,13 +237,7 @@ func (a *App) GetConfig(ctx context.Context, req *connect.Request[v1.GetConfigRe
 	}
 	req.Msg.Id = collectorID
 
-	tenantID := tenantIDFromAttrs(req.Msg.LocalAttributes)
-	if tenantID == "" {
-		tenantID = os.Getenv("DEFAULT_TENANT_ID")
-	}
-	if tenantID == "" {
-		tenantID = defaultTenantID
-	}
+	tenantID := resolveTenantID(tenantIDFromAttrs(req.Msg.LocalAttributes))
 
 	body, err := a.render(ctx, req, tenantID)
 	if err != nil {
@@ -317,55 +318,14 @@ func (a *App) RegisterCollector(ctx context.Context, req *connect.Request[v1.Reg
 }
 
 func (a *App) render(ctx context.Context, req *connect.Request[v1.GetConfigRequest], tenantID string) (string, error) {
-	if a.tmpl == nil {
-		return "", fmt.Errorf("template bundle not initialized")
-	}
-
-	renderedConfig, found, err := a.renderedConfigFromRedis(ctx, tenantID, req.Msg.Id)
-	if err != nil {
-		return "", err
-	}
-	if found {
-		return renderedConfig, nil
-	}
-
-	features, customConfig, err := a.featuresForCollector(ctx, tenantID, req.Msg.Id)
-	if err != nil {
-		return "", err
-	}
-	if customConfig != "" {
-		return customConfig, nil
-	}
-
-	credentials := map[string]string{
-		"mimir_password": os.Getenv("MIMIR_PASSWORD"),
-		"loki_password":  os.Getenv("LOKI_PASSWORD"),
-		"tempo_password": os.Getenv("TEMPO_PASSWORD"),
-	}
-	for key, value := range credentials {
-		if value == "" {
-			credentials[key] = "password"
-		}
-	}
-
-	lgtmcfg := a.lgtmCfg
-
-	data := map[string]any{
-		"TenantID":       tenantID,
-		"ID":             req.Msg.Id,
-		"ComponentID":    sanitizeAlloyIdentifier(req.Msg.Id),
-		"LocalAttrs":     req.Msg.LocalAttributes,
-		"RequestedHash":  req.Msg.Hash,
-		"RequestedAtUTC": time.Now().UTC().Format(time.RFC3339),
-		"Features":       features,
-		"Credentials":    credentials,
-		"LGTMCfg":        lgtmcfg,
-	}
-	var buf bytes.Buffer
-	if err := a.tmpl.ExecuteTemplate(&buf, configTemplateName, data); err != nil {
-		return "", fmt.Errorf("render template: %w", err)
-	}
-	return buf.String(), nil
+	return a.renderAndStoreCollectorConfig(
+		ctx,
+		tenantID,
+		req.Msg.Id,
+		req.Msg.LocalAttributes,
+		req.Msg.Hash,
+		false,
+	)
 }
 
 func (a *App) UnregisterCollector(ctx context.Context, req *connect.Request[v1.UnregisterCollectorRequest]) (*connect.Response[v1.UnregisterCollectorResponse], error) {
@@ -496,17 +456,102 @@ func (a *App) featuresForCollector(ctx context.Context, tenantID, collectorID st
 	return features, "", nil
 }
 
+func (a *App) renderAndStoreCollectorConfig(
+	ctx context.Context,
+	tenantID string,
+	collectorID string,
+	localAttrs map[string]string,
+	requestedHash string,
+	forceRefresh bool,
+) (string, error) {
+	tenantID = resolveTenantID(tenantID)
+	collectorID = strings.TrimSpace(collectorID)
+	if collectorID == "" {
+		return "", fmt.Errorf("collector id is required")
+	}
+
+	if !forceRefresh {
+		renderedConfig, found, err := a.renderedConfigFromRedis(ctx, tenantID, collectorID)
+		if err != nil {
+			return "", err
+		}
+		if found {
+			return renderedConfig, nil
+		}
+	}
+
+	features, customConfig, err := a.featuresForCollector(ctx, tenantID, collectorID)
+	if err != nil {
+		return "", err
+	}
+
+	if customConfig != "" {
+		if err := a.storeRenderedConfigInRedis(ctx, tenantID, collectorID, customConfig); err != nil {
+			return "", err
+		}
+		return customConfig, nil
+	}
+
+	if a.tmpl == nil {
+		return "", fmt.Errorf("template bundle not initialized")
+	}
+
+	credentials := map[string]string{
+		"mimir_password": os.Getenv("MIMIR_PASSWORD"),
+		"loki_password":  os.Getenv("LOKI_PASSWORD"),
+		"tempo_password": os.Getenv("TEMPO_PASSWORD"),
+	}
+	for key, value := range credentials {
+		if value == "" {
+			credentials[key] = "password"
+		}
+	}
+
+	data := map[string]any{
+		"TenantID":       tenantID,
+		"ID":             collectorID,
+		"ComponentID":    sanitizeAlloyIdentifier(collectorID),
+		"LocalAttrs":     localAttrs,
+		"RequestedHash":  requestedHash,
+		"RequestedAtUTC": time.Now().UTC().Format(time.RFC3339),
+		"Features":       features,
+		"Credentials":    credentials,
+		"LGTMCfg":        a.lgtmCfg,
+	}
+
+	var buf bytes.Buffer
+	if err := a.tmpl.ExecuteTemplate(&buf, configTemplateName, data); err != nil {
+		return "", fmt.Errorf("render template: %w", err)
+	}
+	renderedConfig := buf.String()
+	if err := a.storeRenderedConfigInRedis(ctx, tenantID, collectorID, renderedConfig); err != nil {
+		return "", err
+	}
+	return renderedConfig, nil
+}
+
+func (a *App) storeRenderedConfigInRedis(ctx context.Context, tenantID, collectorID, renderedConfig string) error {
+	if a.rdb == nil {
+		return nil
+	}
+
+	if strings.TrimSpace(renderedConfig) == "" {
+		return fmt.Errorf("rendered config is empty")
+	}
+
+	key := renderedConfigRedisKey(tenantID, collectorID)
+	if err := a.rdb.Set(ctx, key, renderedConfig, 0).Err(); err != nil {
+		return fmt.Errorf("store rendered config in redis: %w", err)
+	}
+	return nil
+}
+
 func (a *App) renderedConfigFromRedis(ctx context.Context, tenantID, collectorID string) (string, bool, error) {
 	if a.rdb == nil {
 		return "", false, nil
 	}
 
-	keyTemplate := strings.TrimSpace(os.Getenv("REDIS_RENDERED_CONFIG_KEY_TEMPLATE"))
-	if keyTemplate == "" {
-		keyTemplate = defaultRenderedConfigKeyTemplate
-	}
-
-	key := fmt.Sprintf(keyTemplate, tenantID, collectorID)
+	key := renderedConfigRedisKey(tenantID, collectorID)
 	renderedConfig, err := a.rdb.Get(ctx, key).Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
@@ -521,6 +566,24 @@ func (a *App) renderedConfigFromRedis(ctx context.Context, tenantID, collectorID
 	}
 
 	return renderedConfig, true, nil
+}
+
+func renderedConfigRedisKey(tenantID, collectorID string) string {
+	keyTemplate := strings.TrimSpace(os.Getenv("REDIS_RENDERED_CONFIG_KEY_TEMPLATE"))
+	if keyTemplate == "" {
+		keyTemplate = defaultRenderedConfigKeyTemplate
+	}
+	return fmt.Sprintf(keyTemplate, resolveTenantID(tenantID), strings.TrimSpace(collectorID))
+}
+
+func resolveTenantID(candidate string) string {
+	if trimmed := strings.TrimSpace(candidate); trimmed != "" {
+		return trimmed
+	}
+	if fromEnv := strings.TrimSpace(os.Getenv("DEFAULT_TENANT_ID")); fromEnv != "" {
+		return fromEnv
+	}
+	return defaultTenantID
 }
 
 func tenantIDFromAttrs(attrs map[string]string) string {
