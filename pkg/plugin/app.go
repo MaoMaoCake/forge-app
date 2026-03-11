@@ -87,11 +87,12 @@ func (ns NullString) MarshalJSON() ([]byte, error) {
 
 type Agent struct {
 	gorm.Model
-	Name        string      `gorm:"type:varchar(100);not null" json:"name"`
-	AgentUUID   string      `gorm:"uniqueIndex" json:"agent_uuid"`
-	LastSeen    time.Time   `json:"last_seen,omitempty"`
-	Advanced    bool        `gorm:"default:false" json:"advanced"`
-	AgentConfig AgentConfig `json:"agent_config"`
+	Name            string      `gorm:"type:varchar(100);not null" json:"name"`
+	AgentUUID       string      `gorm:"uniqueIndex" json:"agent_uuid"`
+	LastSeen        time.Time   `json:"last_seen,omitempty"`
+	LastSeenVersion string      `json:"last_seen_version,omitempty"`
+	Advanced        bool        `gorm:"default:false" json:"advanced"`
+	AgentConfig     AgentConfig `json:"agent_config"`
 }
 
 type AgentConfig struct {

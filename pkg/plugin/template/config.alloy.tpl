@@ -1,46 +1,54 @@
+{{- $componentID := .ComponentID -}}
+{{ if .Advanced }}
+    declare "custom" {
+    {{ .Features.Config}}
+    }
+    custom {}
+{{end}}
+
 declare "metrics" {
     {{ if .Features.SelfMonitor }}
-    prometheus.exporter.self "self_exporter_{{ .ID }}" {}
-    prometheus.scrape "scrape_self_monitor{{ .ID }}" {
-        targets = prometheus.exporter.self.self_exporter_{{.ID}}.targets
-        forward_to = [prometheus.remote_write.rw_{{.ID}}.receiver]
+    prometheus.exporter.self "self_exporter_{{ $componentID }}" {}
+    prometheus.scrape "scrape_self_monitor{{ $componentID }}" {
+        targets = prometheus.exporter.self.self_exporter_{{ $componentID }}.targets
+        forward_to = [prometheus.remote_write.rw_{{ $componentID }}.receiver]
     }
 
     {{ end }}
 
     {{ if .Features.LinuxMonitor }}
-    prometheus.exporter.unix "unix_exporter_{{ .ID }}" {}
-    prometheus.scrape "scrape_unix_exporter_{{ .ID }}" {
-        targets    = prometheus.exporter.unix.unix_exporter_{{.ID}}.targets
-        forward_to = [prometheus.remote_write.rw_{{.ID}}.receiver]
+    prometheus.exporter.unix "unix_exporter_{{ $componentID }}" {}
+    prometheus.scrape "scrape_unix_exporter_{{ $componentID }}" {
+        targets    = prometheus.exporter.unix.unix_exporter_{{ $componentID }}.targets
+        forward_to = [prometheus.remote_write.rw_{{ $componentID }}.receiver]
     }
 
     {{ end }}
 
     {{ if .Features.WindowsMonitor }}
-    prometheus.exporter.windows "windows_exporter_{{ .ID }}" {
+    prometheus.exporter.windows "windows_exporter_{{ $componentID }}" {
         enabled_collectors = ["cpu", "cs", "logical_disk", "net", "os", "service", "system", "time", "diskdrive"]
     }
 
     // Configure a prometheus.scrape component to collect windows metrics.
-    prometheus.scrape "scrape_windows_exporter_{{ .ID }}" {
-    targets    = prometheus.exporter.windows.windows_exporter_{{ .ID }}.targets
-    forward_to = [prometheus.remote_write.rw_{{ .ID }}.receiver]
+    prometheus.scrape "scrape_windows_exporter_{{ $componentID }}" {
+    targets    = prometheus.exporter.windows.windows_exporter_{{ $componentID }}.targets
+    forward_to = [prometheus.remote_write.rw_{{ $componentID }}.receiver]
     }
     {{end}}
 
     {{ if .Features.ContainerMonitor }}
-        prometheus.exporter.cadvisor "container_exporter_{{ .ID }}" {
+        prometheus.exporter.cadvisor "container_exporter_{{ $componentID }}" {
             docker_host = "unix:///var/run/docker.sock"
         }
-        prometheus.scrape "scrape_container_exporter_{{ .ID }}" {
-        targets    = prometheus.exporter.cadvisor.container_exporter_{{ .ID }}.targets
-        forward_to = [ prometheus.remote_write.rw_{{ .ID }}.receiver ]
+        prometheus.scrape "scrape_container_exporter_{{ $componentID }}" {
+        targets    = prometheus.exporter.cadvisor.container_exporter_{{ $componentID }}.targets
+        forward_to = [ prometheus.remote_write.rw_{{ $componentID }}.receiver ]
         }
     {{end}}
 
     {{ if or .Features.LinuxMonitor (or .Features.SelfMonitor (or .Features.WindowsMonitor .Features.ContainerMonitor)) }}
-    prometheus.remote_write "rw_{{ .ID }}" {
+    prometheus.remote_write "rw_{{ $componentID }}" {
         endpoint {
             url = "{{.LGTMCfg.Mimir.URL}}"
             basic_auth {
@@ -78,7 +86,7 @@ declare "logs" {
             }
         }
         loki.source.journal "read" {
-            forward_to = [loki.write.lw_{{ .ID }}.receiver,]
+            forward_to = [loki.write.lw_{{ $componentID }}.receiver,]
             relabel_rules = loki.relabel.journal.rules
             labels = {
             "job" = "log_exporter",
@@ -86,42 +94,42 @@ declare "logs" {
         }
     {{end}}
     {{ if .Features.WindowsEventLog}}
-        loki.source.windowsevent "application_logs{{ .ID }}"  {
+        loki.source.windowsevent "application_logs{{ $componentID }}"  {
         eventlog_name = "Application"
-        forward_to = [loki.write.lw_{{ .ID }}.receiver]
+        forward_to = [loki.write.lw_{{ $componentID }}.receiver]
         }
     {{end}}
 
 
     {{ if .Features.DockerLog}}
-        discovery.docker "container_logs_{{ .ID }}" {
+        discovery.docker "container_logs_{{ $componentID }}" {
         host = "unix:///var/run/docker.sock"
         }
 
-        loki.source.docker "container_logs_{{ .ID }}" {
+        loki.source.docker "container_logs_{{ $componentID }}" {
         host       = "unix:///var/run/docker.sock"
-        targets    = discovery.docker.container_logs_{{ .ID }}.targets
+        targets    = discovery.docker.container_logs_{{ $componentID }}.targets
         labels     = {"app" = "docker"}
-        forward_to = [loki.write.lw_{{ .ID }}.receiver]
+        forward_to = [loki.write.lw_{{ $componentID }}.receiver]
         }
     {{end}}
 
 
     {{if .Features.FileMonitor}}
-        local.file_match "files_{{ .ID }}" {
+        local.file_match "files_{{ $componentID }}" {
             path_targets = [
                 {__path__ = "/tmp/*.log"},
             ]
         }
 
         loki.source.file "tmpfiles" {
-            targets    = local.file_match.files_{{.ID}}.targets
-            forward_to = [loki.write.lw_{{.ID}}.receiver]
+            targets    = local.file_match.files_{{ $componentID }}.targets
+            forward_to = [loki.write.lw_{{ $componentID }}.receiver]
         }
     {{end}}
 
     {{if .Features.JournalLog}}
-        loki.write "lw_{{ .ID }}" {
+        loki.write "lw_{{ $componentID }}" {
             endpoint {
                 url ="{{.LGTMCfg.Loki.URL}}"
                 headers = {

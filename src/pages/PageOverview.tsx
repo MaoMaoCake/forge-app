@@ -23,6 +23,9 @@ interface Agent {
   agent_uuid?: string; // actual identifier from backend JSON
   name?: string;
   description?: string;
+  last_seen_version?: string;
+  lastSeenVersion?: string;
+  LastSeenVersion?: string;
   agentConfig?: AgentConfig | AgentConfig[];
   AgentConfig?: AgentConfig | AgentConfig[]; // handle different casings just in case
 }
@@ -61,11 +64,13 @@ function PageOverview() {
     // Prefer explicit name/UUID, but always show something.
     const base = agent.name || agent.agent_uuid || agent.uuid || `Collector #${index + 1}`;
     const description = agent.description;
+    const version = agent.last_seen_version || agent.lastSeenVersion || agent.LastSeenVersion;
 
     return (
       <div>
         <div>{base}</div>
         {description && <div className={s.description}>{description}</div>}
+        {version && <div className={s.meta}>Last seen Alloy version: {version}</div>}
       </div>
     );
   };
@@ -176,6 +181,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
     gap: ${theme.spacing(1)};
   `,
   description: css`
+    color: ${theme.colors.text.secondary};
+    font-size: ${theme.typography.bodySmall.fontSize};
+  `,
+  meta: css`
     color: ${theme.colors.text.secondary};
     font-size: ${theme.typography.bodySmall.fontSize};
   `,

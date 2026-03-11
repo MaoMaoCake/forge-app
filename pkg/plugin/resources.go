@@ -25,7 +25,12 @@ import (
 const (
 	configTemplateName = "config.alloy.tpl"
 	defaultTenantID    = "default"
+	// Can be overridden with REDIS_RENDERED_CONFIG_KEY_TEMPLATE env var.
+	defaultRenderedConfigKeyTemplate = "nova:cfg:%s:%s"
 )
+
+var errCollectorNotFound = errors.New("collector not found")
+var collectorVersionKeyNormalizer = strings.NewReplacer(".", "", "_", "", "-", "", " ", "")
 
 type serviceEndpoint struct {
 	URL string `json:"url"`
@@ -50,12 +55,11 @@ type Features struct {
 
 // handlePing is an example HTTP GET resource that returns a {"message": "ok"} JSON response.
 func (a *App) handlePing(w http.ResponseWriter, req *http.Request) {
-	w.Header().Add("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json")
 	if _, err := w.Write([]byte(`{"message": "ok"}`)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
 }
 
 // handleEcho is an example HTTP POST resource that accepts a JSON with a "message" key and
@@ -72,12 +76,11 @@ func (a *App) handleEcho(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	w.Header().Add("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
 }
 
 func (a *App) getCollector(w http.ResponseWriter, req *http.Request) {
@@ -95,7 +98,7 @@ func (a *App) getCollector(w http.ResponseWriter, req *http.Request) {
 
 	uuid := req.URL.Query().Get("uuid")
 
-	w.Header().Add("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json")
 
 	if uuid != "" {
 		var agent Agent
@@ -113,7 +116,6 @@ func (a *App) getCollector(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		w.WriteHeader(http.StatusOK)
 		return
 	}
 
@@ -130,7 +132,6 @@ func (a *App) getCollector(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
 }
 
 func (a *App) createOrUpdateAgent(w http.ResponseWriter, req *http.Request) {
@@ -141,25 +142,48 @@ func (a *App) createOrUpdateAgent(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	agent.AgentUUID = strings.TrimSpace(agent.AgentUUID)
+	agent.LastSeenVersion = strings.TrimSpace(agent.LastSeenVersion)
+	if agent.AgentUUID == "" {
+		http.Error(w, "agent_uuid is required", http.StatusBadRequest)
+		return
+	}
 
 	if a.DB == nil {
 		http.Error(w, "database not initialized", http.StatusInternalServerError)
 		return
 	}
 
+	now := time.Now().UTC()
 	err := a.DB.Transaction(func(tx *gorm.DB) error {
 		var existing Agent
 		if err := tx.Where("agent_uuid = ?", agent.AgentUUID).First(&existing).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
-				// Create new agent
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				// Create a new agent
+				if agent.LastSeen.IsZero() {
+					agent.LastSeen = now
+				}
+				if strings.TrimSpace(agent.Name) == "" {
+					agent.Name = agent.AgentUUID
+				}
 				return tx.Create(&agent).Error
 			}
 			return err
 		}
 
 		// Update existing agent
-		existing.Name = agent.Name
-		existing.LastSeen = agent.LastSeen
+		existing.Name = strings.TrimSpace(agent.Name)
+		if existing.Name == "" {
+			existing.Name = existing.AgentUUID
+		}
+		if agent.LastSeen.IsZero() {
+			existing.LastSeen = now
+		} else {
+			existing.LastSeen = agent.LastSeen
+		}
+		if agent.LastSeenVersion != "" {
+			existing.LastSeenVersion = agent.LastSeenVersion
+		}
 		existing.Advanced = agent.Advanced
 
 		if err := tx.Save(&existing).Error; err != nil {
@@ -169,7 +193,7 @@ func (a *App) createOrUpdateAgent(w http.ResponseWriter, req *http.Request) {
 		// Upsert AgentConfig
 		var existingConfig AgentConfig
 		if err := tx.Where("agent_id = ?", existing.ID).First(&existingConfig).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
 				agent.AgentConfig.AgentID = existing.ID
 				return tx.Create(&agent.AgentConfig).Error
 			}
@@ -200,9 +224,11 @@ func (a *App) GetConfig(ctx context.Context, req *connect.Request[v1.GetConfigRe
 	if req == nil || req.Msg == nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("request payload is required"))
 	}
-	if req.Msg.Id == "" {
+	collectorID := strings.TrimSpace(req.Msg.Id)
+	if collectorID == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("collector id is required"))
 	}
+	req.Msg.Id = collectorID
 
 	tenantID := tenantIDFromAttrs(req.Msg.LocalAttributes)
 	if tenantID == "" {
@@ -214,6 +240,9 @@ func (a *App) GetConfig(ctx context.Context, req *connect.Request[v1.GetConfigRe
 
 	body, err := a.render(ctx, req, tenantID)
 	if err != nil {
+		if errors.Is(err, errCollectorNotFound) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("collector %q not found", collectorID))
+		}
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
@@ -232,30 +261,80 @@ func (a *App) GetConfig(ctx context.Context, req *connect.Request[v1.GetConfigRe
 }
 
 func (a *App) RegisterCollector(ctx context.Context, req *connect.Request[v1.RegisterCollectorRequest]) (*connect.Response[v1.RegisterCollectorResponse], error) {
-	log.Printf("RegisterCollector: id=%s local_attrs=%v", req.Msg.Id, req.Msg.LocalAttributes)
+	if req == nil || req.Msg == nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("request payload is required"))
+	}
+	collectorID := strings.TrimSpace(req.Msg.Id)
+	if collectorID == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("collector id is required"))
+	}
+	if a.DB == nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("database not initialized"))
+	}
+
+	log.Printf("RegisterCollector: id=%s local_attrs=%v", collectorID, req.Msg.LocalAttributes)
+	version := collectorVersionFromAttrs(req.Msg.LocalAttributes)
+	if version == "" {
+		version = collectorVersionFromAttrs(req.Msg.Attributes)
+	}
+
+	now := time.Now().UTC()
+	err := a.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing Agent
+		err := tx.Where("agent_uuid = ?", collectorID).First(&existing).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			name := strings.TrimSpace(req.Msg.Name)
+			if name == "" {
+				name = collectorID
+			}
+			return tx.Create(&Agent{
+				Name:            name,
+				AgentUUID:       collectorID,
+				LastSeen:        now,
+				LastSeenVersion: version,
+			}).Error
+		}
+		if err != nil {
+			return err
+		}
+
+		existing.LastSeen = now
+		if version != "" && version != existing.LastSeenVersion {
+			existing.LastSeenVersion = version
+		}
+		if name := strings.TrimSpace(req.Msg.Name); name != "" {
+			existing.Name = name
+		} else if strings.TrimSpace(existing.Name) == "" {
+			existing.Name = collectorID
+		}
+		return tx.Save(&existing).Error
+	})
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("register collector: %w", err))
+	}
+
 	return connect.NewResponse(&v1.RegisterCollectorResponse{}), nil
 }
 
-func (s *App) render(ctx context.Context, req *connect.Request[v1.GetConfigRequest], tenantID string) (string, error) {
-	if s.rdb == nil {
-		return "", fmt.Errorf("redis client not initialized")
-	}
-	if s.tmpl == nil {
+func (a *App) render(ctx context.Context, req *connect.Request[v1.GetConfigRequest], tenantID string) (string, error) {
+	if a.tmpl == nil {
 		return "", fmt.Errorf("template bundle not initialized")
 	}
 
-	featureKey := fmt.Sprintf("nova:feat:%s:%s", tenantID, req.Msg.Id)
-	featureString, err := s.rdb.Get(ctx, featureKey).Result()
-	var features Features
+	renderedConfig, found, err := a.renderedConfigFromRedis(ctx, tenantID, req.Msg.Id)
 	if err != nil {
-		if err != redis.Nil {
-			return "", fmt.Errorf("fetch features: %w", err)
-		}
-	} else {
-		features, err = parseFeatures(featureString)
-		if err != nil {
-			return "", fmt.Errorf("parse features: %w", err)
-		}
+		return "", err
+	}
+	if found {
+		return renderedConfig, nil
+	}
+
+	features, customConfig, err := a.featuresForCollector(ctx, tenantID, req.Msg.Id)
+	if err != nil {
+		return "", err
+	}
+	if customConfig != "" {
+		return customConfig, nil
 	}
 
 	credentials := map[string]string{
@@ -269,15 +348,12 @@ func (s *App) render(ctx context.Context, req *connect.Request[v1.GetConfigReque
 		}
 	}
 
-	lgtmcfg := LGTMCFG{
-		Mimir: serviceEndpoint{URL: os.Getenv("MIMIR_URL")},
-		Loki:  serviceEndpoint{URL: os.Getenv("LOKI_URL")},
-		Tempo: serviceEndpoint{URL: os.Getenv("TEMPO_URL")},
-	}
+	lgtmcfg := a.lgtmCfg
 
 	data := map[string]any{
 		"TenantID":       tenantID,
 		"ID":             req.Msg.Id,
+		"ComponentID":    sanitizeAlloyIdentifier(req.Msg.Id),
 		"LocalAttrs":     req.Msg.LocalAttributes,
 		"RequestedHash":  req.Msg.Hash,
 		"RequestedAtUTC": time.Now().UTC().Format(time.RFC3339),
@@ -286,14 +362,21 @@ func (s *App) render(ctx context.Context, req *connect.Request[v1.GetConfigReque
 		"LGTMCfg":        lgtmcfg,
 	}
 	var buf bytes.Buffer
-	if err := s.tmpl.ExecuteTemplate(&buf, configTemplateName, data); err != nil {
+	if err := a.tmpl.ExecuteTemplate(&buf, configTemplateName, data); err != nil {
 		return "", fmt.Errorf("render template: %w", err)
 	}
 	return buf.String(), nil
 }
 
 func (a *App) UnregisterCollector(ctx context.Context, req *connect.Request[v1.UnregisterCollectorRequest]) (*connect.Response[v1.UnregisterCollectorResponse], error) {
-	log.Printf("UnregisterCollector: id=%s", req.Msg.Id)
+	if req == nil || req.Msg == nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("request payload is required"))
+	}
+	collectorID := strings.TrimSpace(req.Msg.Id)
+	if collectorID == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("collector id is required"))
+	}
+	log.Printf("UnregisterCollector: id=%s", collectorID)
 	return connect.NewResponse(&v1.UnregisterCollectorResponse{}), nil
 }
 
@@ -365,6 +448,81 @@ func featuresFromMap(in map[string]bool) Features {
 	return f
 }
 
+func featuresFromAgentConfig(cfg AgentConfig) Features {
+	return Features{
+		LinuxMonitor:     cfg.CollectUnixNodeMetrics,
+		WindowsMonitor:   cfg.CollectWinNodeMetrics,
+		ContainerMonitor: cfg.CollectCadvisorMetrics,
+		JournalLog:       cfg.CollectUnixLogs,
+		WindowsEventLog:  cfg.CollectWinLogs,
+	}
+}
+
+func (a *App) featuresForCollector(ctx context.Context, tenantID, collectorID string) (Features, string, error) {
+	if a.DB != nil {
+		var agent Agent
+		err := a.DB.WithContext(ctx).Preload("AgentConfig").Where("agent_uuid = ?", collectorID).First(&agent).Error
+		if err == nil {
+			if agent.Advanced {
+				customConfig := strings.TrimSpace(agent.AgentConfig.Config.String)
+				if customConfig != "" {
+					return Features{}, customConfig, nil
+				}
+			}
+			return featuresFromAgentConfig(agent.AgentConfig), "", nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return Features{}, "", fmt.Errorf("fetch collector from database: %w", err)
+		}
+	}
+
+	if a.rdb == nil {
+		return Features{}, "", errCollectorNotFound
+	}
+
+	featureKey := fmt.Sprintf("nova:feat:%s:%s", tenantID, collectorID)
+	featureString, err := a.rdb.Get(ctx, featureKey).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return Features{}, "", errCollectorNotFound
+		}
+		return Features{}, "", fmt.Errorf("fetch features from redis: %w", err)
+	}
+
+	features, err := parseFeatures(featureString)
+	if err != nil {
+		return Features{}, "", fmt.Errorf("parse features: %w", err)
+	}
+	return features, "", nil
+}
+
+func (a *App) renderedConfigFromRedis(ctx context.Context, tenantID, collectorID string) (string, bool, error) {
+	if a.rdb == nil {
+		return "", false, nil
+	}
+
+	keyTemplate := strings.TrimSpace(os.Getenv("REDIS_RENDERED_CONFIG_KEY_TEMPLATE"))
+	if keyTemplate == "" {
+		keyTemplate = defaultRenderedConfigKeyTemplate
+	}
+
+	key := fmt.Sprintf(keyTemplate, tenantID, collectorID)
+	renderedConfig, err := a.rdb.Get(ctx, key).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("fetch rendered config from redis: %w", err)
+	}
+
+	renderedConfig = strings.TrimSpace(renderedConfig)
+	if renderedConfig == "" {
+		return "", false, nil
+	}
+
+	return renderedConfig, true, nil
+}
+
 func tenantIDFromAttrs(attrs map[string]string) string {
 	if len(attrs) == 0 {
 		return ""
@@ -385,7 +543,86 @@ func tenantIDFromAttrs(attrs map[string]string) string {
 	return ""
 }
 
+func collectorVersionFromAttrs(attrs map[string]string) string {
+	if len(attrs) == 0 {
+		return ""
+	}
+
+	preferred := []string{
+		"collector.version",
+		"collector_version",
+		"collectorVersion",
+		"alloy.version",
+		"alloy_version",
+		"alloyVersion",
+		"service.version",
+		"service_version",
+		"serviceVersion",
+		"version",
+	}
+	for _, key := range preferred {
+		if value, ok := attrs[key]; ok {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+
+	for key, value := range attrs {
+		if !isCollectorVersionKey(key) {
+			continue
+		}
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func isCollectorVersionKey(key string) bool {
+	normalized := collectorVersionKeyNormalizer.Replace(strings.ToLower(strings.TrimSpace(key)))
+	switch normalized {
+	case "collectorversion", "alloyversion", "serviceversion", "version":
+		return true
+	default:
+		return false
+	}
+}
+
 func hashConfig(content string) string {
 	sum := sha256.Sum256([]byte(content))
 	return hex.EncodeToString(sum[:])
+}
+
+func sanitizeAlloyIdentifier(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "_"
+	}
+
+	var b strings.Builder
+	b.Grow(len(trimmed) + 1)
+	lastUnderscore := false
+
+	for _, r := range trimmed {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
+			b.WriteRune(r)
+			lastUnderscore = false
+		default:
+			if !lastUnderscore {
+				b.WriteByte('_')
+				lastUnderscore = true
+			}
+		}
+	}
+
+	sanitized := strings.Trim(b.String(), "_")
+	if sanitized == "" {
+		return "_"
+	}
+	if sanitized[0] >= '0' && sanitized[0] <= '9' {
+		return "_" + sanitized
+	}
+	return sanitized
 }
