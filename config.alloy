@@ -1,7 +1,0 @@
-remotecfg {
-    url = "http://localhost:3000/api/plugins/maomaocake-forge-app/resources/"
-
-    id             = "adcb4748-bd66-442c-ad4a-8de88421d5de"
-    attributes     = {"cluster" = "dev", "namespace" = "otlp-dev"}
-    poll_frequency = "5m"
-}
