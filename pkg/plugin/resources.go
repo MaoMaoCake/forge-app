@@ -246,6 +246,9 @@ func (a *App) GetConfig(ctx context.Context, req *connect.Request[v1.GetConfigRe
 		}
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
+	if err := a.updateCollectorLastSeen(ctx, collectorID); err != nil {
+		log.Printf("GetConfig: failed to update collector last seen: id=%s err=%v", collectorID, err)
+	}
 
 	hash := hashConfig(body)
 	if req.Msg.Hash != "" && req.Msg.Hash == hash {
@@ -315,6 +318,23 @@ func (a *App) RegisterCollector(ctx context.Context, req *connect.Request[v1.Reg
 	}
 
 	return connect.NewResponse(&v1.RegisterCollectorResponse{}), nil
+}
+
+func (a *App) updateCollectorLastSeen(ctx context.Context, collectorID string) error {
+	if a.DB == nil {
+		return nil
+	}
+
+	updates := map[string]any{
+		"last_seen": time.Now().UTC(),
+	}
+
+	result := a.DB.WithContext(ctx).Model(&Agent{}).Where("agent_uuid = ?", collectorID).Updates(updates)
+	if result.Error != nil {
+		return fmt.Errorf("update collector heartbeat: %w", result.Error)
+	}
+
+	return nil
 }
 
 func (a *App) render(ctx context.Context, req *connect.Request[v1.GetConfigRequest], tenantID string) (string, error) {

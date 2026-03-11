@@ -3,5 +3,5 @@ remotecfg {
 
     id             = "fe767d4b-2a48-4a8b-add5-60b3cf26dcaa"
     attributes     = {"cluster" = "dev", "namespace" = "otlp-dev", "version" = constants.version}
-    poll_frequency = "5m"
+    poll_frequency = "30s"
 }

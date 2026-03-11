@@ -23,6 +23,9 @@ interface Agent {
   agent_uuid?: string; // actual identifier from backend JSON
   name?: string;
   description?: string;
+  last_seen?: string;
+  lastSeen?: string;
+  LastSeen?: string;
   last_seen_version?: string;
   lastSeenVersion?: string;
   LastSeenVersion?: string;
@@ -60,16 +63,31 @@ function PageOverview() {
     fetchCollectors();
   }, []);
 
+  const formatLastSeen = (value?: string) => {
+    if (!value) {
+      return null;
+    }
+
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return value;
+    }
+
+    return parsed.toLocaleString();
+  };
+
   const renderAgentName = (agent: Agent, index: number) => {
     // Prefer explicit name/UUID, but always show something.
     const base = agent.name || agent.agent_uuid || agent.uuid || `Collector #${index + 1}`;
     const description = agent.description;
+    const lastSeen = formatLastSeen(agent.last_seen || agent.lastSeen || agent.LastSeen);
     const version = agent.last_seen_version || agent.lastSeenVersion || agent.LastSeenVersion;
 
     return (
       <div>
         <div>{base}</div>
         {description && <div className={s.description}>{description}</div>}
+        {lastSeen && <div className={s.meta}>Last seen: {lastSeen}</div>}
         {version && <div className={s.meta}>Last seen Alloy version: {version}</div>}
       </div>
     );
