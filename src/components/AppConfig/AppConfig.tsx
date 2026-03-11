@@ -3,12 +3,15 @@ import { lastValueFrom } from 'rxjs';
 import { css } from '@emotion/css';
 import { AppPluginMeta, GrafanaTheme2, PluginConfigPageProps, PluginMeta } from '@grafana/data';
 import { getBackendSrv } from '@grafana/runtime';
-import { Button, Field, FieldSet, SecretInput, useStyles2 } from '@grafana/ui';
+import { Button, Field, FieldSet, Input, SecretInput, useStyles2 } from '@grafana/ui';
 import { testIds } from '../testIds';
 
 type AppPluginSettings = {
   postgresDsn?: string;
   redis_url?: string;
+  mimir_url?: string;
+  loki_url?: string;
+  tempo_url?: string;
 };
 
 type State = {
@@ -16,6 +19,9 @@ type State = {
   redis_url_set: boolean;
   postgresDsn: string;
   redis_url: string;
+  mimir_url: string;
+  loki_url: string;
+  tempo_url: string;
 };
 
 export interface AppConfigProps extends PluginConfigPageProps<AppPluginMeta<AppPluginSettings>> {}
@@ -23,11 +29,16 @@ export interface AppConfigProps extends PluginConfigPageProps<AppPluginMeta<AppP
 const AppConfig = ({ plugin }: AppConfigProps) => {
   const s = useStyles2(getStyles);
   const { enabled, pinned, jsonData, secureJsonFields } = plugin.meta;
+  const pluginJsonData = (jsonData ?? {}) as AppPluginSettings;
+
   const [state, setState] = useState<State>({
     postgresDsnSet: Boolean(secureJsonFields?.postgresDsn),
     redis_url_set: Boolean(secureJsonFields?.redis_url),
-    postgresDsn: secureJsonFields?.postgresDsn ? '' : (jsonData as any)?.postgresDsn || '',
-    redis_url: secureJsonFields?.redis_url ? '' : (jsonData as any)?.redis_url || '',
+    postgresDsn: secureJsonFields?.postgresDsn ? '' : pluginJsonData.postgresDsn || '',
+    redis_url: secureJsonFields?.redis_url ? '' : pluginJsonData.redis_url || '',
+    mimir_url: pluginJsonData.mimir_url || '',
+    loki_url: pluginJsonData.loki_url || '',
+    tempo_url: pluginJsonData.tempo_url || '',
   });
 
   const isSubmitDisabled =
@@ -72,7 +83,12 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
     updatePluginAndReload(plugin.meta.id, {
       enabled,
       pinned,
-      jsonData: {},
+      jsonData: {
+        ...pluginJsonData,
+        mimir_url: state.mimir_url,
+        loki_url: state.loki_url,
+        tempo_url: state.tempo_url,
+      },
       secureJsonData: Object.keys(secureJsonData).length ? secureJsonData : undefined,
     });
   };
@@ -111,6 +127,51 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
             placeholder={`E.g.: redis://:password@localhost:6379/0`}
             onChange={onChange}
             onReset={onResetRedisUrl}
+          />
+        </Field>
+
+        <Field
+          label="Mimir URL"
+          description="Prometheus remote_write endpoint URL included in generated Alloy config"
+          className={s.marginTop}
+        >
+          <Input
+            width={60}
+            name="mimir_url"
+            id="config-mimir-url"
+            value={state.mimir_url}
+            placeholder="E.g.: http://localhost:9009/api/v1/push"
+            onChange={onChange}
+          />
+        </Field>
+
+        <Field
+          label="Loki URL"
+          description="Loki write endpoint URL included in generated Alloy config"
+          className={s.marginTop}
+        >
+          <Input
+            width={60}
+            name="loki_url"
+            id="config-loki-url"
+            value={state.loki_url}
+            placeholder="E.g.: http://localhost:3100/loki/api/v1/push"
+            onChange={onChange}
+          />
+        </Field>
+
+        <Field
+          label="Tempo URL"
+          description="Tempo endpoint URL included in generated Alloy config"
+          className={s.marginTop}
+        >
+          <Input
+            width={60}
+            name="tempo_url"
+            id="config-tempo-url"
+            value={state.tempo_url}
+            placeholder="E.g.: http://localhost:4318"
+            onChange={onChange}
           />
         </Field>
 

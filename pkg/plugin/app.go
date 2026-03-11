@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
 	"text/template"
 	"time"
 
@@ -36,15 +38,22 @@ var (
 // App is an example app plugin with a backend which can respond to data queries.
 type App struct {
 	backend.CallResourceHandler
-	DB   *gorm.DB
-	rdb  *redis.Client
-	tmpl *template.Template
+	DB      *gorm.DB
+	rdb     *redis.Client
+	tmpl    *template.Template
+	lgtmCfg LGTMCFG
 }
 
 // NullString wraps sql.NullString to support JSON (de)serialization from/to
 // plain JSON strings. It treats null or empty string as invalid.
 type NullString struct {
 	sql.NullString
+}
+
+type AppJSONData struct {
+	MimirURL string `json:"mimir_url"`
+	LokiURL  string `json:"loki_url"`
+	TempoURL string `json:"tempo_url"`
 }
 
 func (ns *NullString) UnmarshalJSON(data []byte) error {
@@ -100,6 +109,19 @@ type AgentConfig struct {
 // NewApp creates a new example *App instance.
 func NewApp(_ context.Context, settings backend.AppInstanceSettings) (instancemgmt.Instance, error) {
 	var app App
+	var appJSONData AppJSONData
+
+	if len(settings.JSONData) > 0 {
+		if err := json.Unmarshal(settings.JSONData, &appJSONData); err != nil {
+			return nil, fmt.Errorf("parse app jsonData: %w", err)
+		}
+	}
+
+	app.lgtmCfg = LGTMCFG{
+		Mimir: serviceEndpoint{URL: firstNonEmpty(appJSONData.MimirURL, os.Getenv("MIMIR_URL"))},
+		Loki:  serviceEndpoint{URL: firstNonEmpty(appJSONData.LokiURL, os.Getenv("LOKI_URL"))},
+		Tempo: serviceEndpoint{URL: firstNonEmpty(appJSONData.TempoURL, os.Getenv("TEMPO_URL"))},
+	}
 
 	// Use a httpadapter (provided by the SDK) for resource calls. This allows us
 	// to use a *http.ServeMux for resource calls, so we can map multiple routes
@@ -149,6 +171,16 @@ func NewApp(_ context.Context, settings backend.AppInstanceSettings) (instancemg
 	app.tmpl = tmpl
 
 	return &app, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 // Dispose here tells plugin SDK that plugin wants to clean up resources when a new instance
