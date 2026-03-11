@@ -7,3 +7,4 @@ Version Management
 
 Config Management
 - Add support for push based config management
+- advanced mode for custom config
